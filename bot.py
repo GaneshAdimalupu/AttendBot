@@ -94,13 +94,19 @@ def mark(telegram_id: int, d: date, status: str):
 def register(telegram_id: int, name: str, username: str):
     with get_db() as db:
         db.execute(
-            "INSERT OR IGNORE INTO employees(telegram_id, name, username) VALUES (?,?,?)",
+            "INSERT OR REPLACE INTO employees(telegram_id, name, username) VALUES (?,?,?)",
             (telegram_id, name, username or "")
         )
-        db.execute(
-            "UPDATE employees SET name=?, username=? WHERE telegram_id=?",
-            (name, username or "", telegram_id)
-        )
+
+def is_registered(telegram_id: int) -> bool:
+    with get_db() as db:
+        row = db.execute("SELECT 1 FROM employees WHERE telegram_id=?", (telegram_id,)).fetchone()
+    return row is not None
+
+def get_user_name(telegram_id: int) -> str:
+    with get_db() as db:
+        row = db.execute("SELECT name FROM employees WHERE telegram_id=?", (telegram_id,)).fetchone()
+    return row["name"] if row else "Employee"
 
 def is_admin(telegram_id: int) -> bool:
     return telegram_id in ADMIN_IDS
@@ -158,13 +164,11 @@ def leave_bar(remaining: int) -> str:
 
 # ── Command / callback handlers ───────────────────────────────────────────────
 def handle_start(msg):
-    uid   = msg["from"]["id"]
-    name  = (msg["from"].get("first_name","") + " " + msg["from"].get("last_name","")).strip()
-    uname = msg["from"].get("username","")
-    register(uid, name, uname)
+    uid = msg["from"]["id"]
+    name = get_user_name(uid)
 
     send(uid,
-        f"Hi <b>{name}</b>! Welcome to <b>AttendBot</b>.\n\n"
+        f"Hi <b>{name}</b>! Welcome back to <b>AttendBot</b>.\n\n"
         "Use the menu below — it only takes <b>one tap</b> to mark attendance!\n\n"
         "• <b>Mark Present</b> — mark yourself present\n"
         "• <b>Take Leave</b> — mark a leave day\n"
@@ -174,12 +178,9 @@ def handle_start(msg):
     )
 
 def handle_direct_mark(msg, status: str):
-    uid  = msg["from"]["id"]
-    name = (msg["from"].get("first_name","") + " " + msg["from"].get("last_name","")).strip()
-    uname = msg["from"].get("username","")
-    register(uid, name, uname)
-
+    uid = msg["from"]["id"]
     today = date.today()
+    
     if is_weekend(today):
         send(uid, "It's a weekend — no attendance needed.\nEnjoy your break! See you on Monday.",
              reply_markup=persistent_menu(uid))
@@ -238,12 +239,7 @@ def handle_direct_mark(msg, status: str):
     )
 
 def handle_status(msg):
-    """Upgraded with clean, colored UI"""
     uid = msg["from"]["id"]
-    name = (msg["from"].get("first_name","") + " " + msg["from"].get("last_name","")).strip()
-    uname = msg["from"].get("username","")
-    register(uid, name, uname)
-
     today  = date.today()
     year, month = today.year, today.month
     wdays  = working_days_in_month(year, month)
@@ -259,16 +255,11 @@ def handle_status(msg):
     lines  = []
     for d in wdays:
         ds = d.isoformat()
-        
-        # Color-coded icons
         if d > today:
             icon = "➖"
         else:
             icon = {"present": "🟢", "leave": "🟠"}.get(marked.get(ds), "⚪")
-            
         highlight = " ◀️ <i>Today</i>" if d == today else ""
-        
-        # Using <code> makes it a monospace block so icons perfectly align
         lines.append(f"<code>{d.strftime('%d %b %a')}</code>  {icon}{highlight}")
 
     total_p = sum(1 for v in marked.values() if v == "present")
@@ -320,7 +311,6 @@ def handle_report(msg):
             f"   🟢 {present} P   🟠 {on_leave} L   ⚪ {unmarked} U   🍃 {remain} left"
         )
 
-    # Today's headcount
     with get_db() as db:
         today_present = db.execute(
             "SELECT COUNT(*) AS n FROM attendance WHERE date=? AND status='present'",
@@ -337,7 +327,6 @@ def handle_report(msg):
     send(uid, "\n".join(lines), reply_markup=persistent_menu(uid))
 
 def handle_export(msg):
-    """Fixed File Upload logic for Telegram API"""
     uid = msg["from"]["id"]
     if not is_admin(uid):
         send(uid, "Admin only.", reply_markup=persistent_menu(uid)); return
@@ -376,11 +365,9 @@ def handle_export(msg):
     csv_text = "\n".join(csv_lines)
     fname    = f"attendance_{year}_{month:02d}.csv"
     
-    # 1. Save file locally
     with open(fname, "w", encoding="utf-8") as f:
         f.write(csv_text)
 
-    # 2. Upload file directly to Telegram API
     with open(fname, "rb") as f:
         requests.post(
             f"{TG_API}/sendDocument",
@@ -392,7 +379,6 @@ def handle_export(msg):
             files={"document": f}
         )
 
-    # 3. Clean up the temporary file
     os.remove(fname)
 
 # ── Webhook endpoint ──────────────────────────────────────────────────────────
@@ -403,7 +389,20 @@ def webhook():
         if "message" in update:
             msg  = update["message"]
             text = msg.get("text","").strip()
+            uid  = msg["from"]["id"]
 
+            # --- 1. Registration Flow Gatekeeper ---
+            if not is_registered(uid):
+                if text == "/start":
+                    send(uid, "👋 Welcome to <b>AttendBot</b>!\n\nBefore we begin, please type your <b>Full Legal Name</b> as it should appear on official records:")
+                else:
+                    # Treat whatever they typed as their legal name
+                    uname = msg["from"].get("username", "")
+                    register(uid, text, uname)
+                    send(uid, f"✅ Thank you, <b>{text}</b>! Your profile is set up.\n\nPlease use the menu below to update your status.", reply_markup=persistent_menu(uid))
+                return jsonify(ok=True)
+
+            # --- 2. Button Router (Only for Registered Users) ---
             if text in ["/start", "/help"]:
                 handle_start(msg)
             elif text in ["✅ Mark Present", "Mark Present"]:
