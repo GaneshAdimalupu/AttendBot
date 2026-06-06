@@ -57,9 +57,6 @@ def tg(method, **kwargs):
 def send(chat_id, text, **kwargs):
     return tg("sendMessage", chat_id=chat_id, text=text, parse_mode="HTML", **kwargs)
 
-def answer_cbq(callback_query_id, text=""):
-    return tg("answerCallbackQuery", callback_query_id=callback_query_id, text=text)
-
 # ── Business logic ────────────────────────────────────────────────────────────
 def is_weekend(d: date) -> bool:
     return d.weekday() >= 5   # Saturday=5, Sunday=6
@@ -105,16 +102,10 @@ def register(telegram_id: int, name: str, username: str):
             (name, username or "", telegram_id)
         )
 
-def is_employee(telegram_id: int) -> bool:
-    with get_db() as db:
-        row = db.execute("SELECT 1 FROM employees WHERE telegram_id=?", (telegram_id,)).fetchone()
-    return row is not None
-
 def is_admin(telegram_id: int) -> bool:
     return telegram_id in ADMIN_IDS
 
 def get_streak(telegram_id: int) -> int:
-    """Calculate consecutive working-day present streak ending today or yesterday."""
     today = date.today()
     streak = 0
     d = today
@@ -135,13 +126,11 @@ def get_streak(telegram_id: int) -> int:
     return streak
 
 def is_late_mark() -> bool:
-    """Returns True if current time is after 11:00 AM."""
     now = datetime.now()
     return now.hour >= 11
 
 # ── Message/button builders ───────────────────────────────────────────────────
 def persistent_menu(telegram_id: int):
-    """Generates the Zero-Friction Persistent Keyboard."""
     keyboard = [
         [{"text": "✅ Mark Present"}, {"text": "🏖️ Take Leave"}],
         [{"text": "📊 Check Balance"}]
@@ -155,17 +144,15 @@ def persistent_menu(telegram_id: int):
     }
 
 def streak_text(streak: int) -> str:
-    """Generate streak display text."""
     if streak == 0:
         return ""
     if streak >= 10:
-        return f"\n\n<b>{streak}-day streak!</b> Incredible dedication!"
+        return f"\n\n🔥 <b>{streak}-day streak!</b> Incredible dedication!"
     if streak >= 5:
-        return f"\n\n<b>{streak}-day streak!</b> Keep it going!"
-    return f"\n\nStreak: {streak} days"
+        return f"\n\n🔥 <b>{streak}-day streak!</b> Keep it going!"
+    return f"\n\n🔥 Streak: {streak} days"
 
 def leave_bar(remaining: int) -> str:
-    """Visual leave balance bar."""
     used = LEAVES_PER_MONTH - remaining
     return "🟩" * remaining + "⬜" * used
 
@@ -187,7 +174,6 @@ def handle_start(msg):
     )
 
 def handle_direct_mark(msg, status: str):
-    """Handles direct clicks from the persistent menu."""
     uid  = msg["from"]["id"]
     name = (msg["from"].get("first_name","") + " " + msg["from"].get("last_name","")).strip()
     uname = msg["from"].get("username","")
@@ -201,7 +187,6 @@ def handle_direct_mark(msg, status: str):
 
     current = already_marked(uid, today)
 
-    # Already marked same status — friendly no-op
     if current == status:
         word  = "Present" if status == "present" else "On Leave"
         used   = leave_count(uid, today.year, today.month)
@@ -217,7 +202,6 @@ def handle_direct_mark(msg, status: str):
             reply_markup=persistent_menu(uid))
         return
 
-    # Check leave limits
     if status == "leave":
         used = leave_count(uid, today.year, today.month)
         if current != "leave" and used >= LEAVES_PER_MONTH:
@@ -228,14 +212,11 @@ def handle_direct_mark(msg, status: str):
                 reply_markup=persistent_menu(uid))
             return
 
-    # Detect switch
     switched = current is not None and current != status
     old_word = "Present" if current == "present" else "On Leave" if current else None
 
-    # Process the mark
     mark(uid, today, status)
 
-    # Calculate new balances
     used   = leave_count(uid, today.year, today.month)
     remain = max(0, LEAVES_PER_MONTH - used)
     status_word = "Present" if status == "present" else "On Leave"
@@ -257,6 +238,7 @@ def handle_direct_mark(msg, status: str):
     )
 
 def handle_status(msg):
+    """Upgraded with clean, colored UI"""
     uid = msg["from"]["id"]
     name = (msg["from"].get("first_name","") + " " + msg["from"].get("last_name","")).strip()
     uname = msg["from"].get("username","")
@@ -276,11 +258,18 @@ def handle_status(msg):
     marked = {r["date"]: r["status"] for r in rows}
     lines  = []
     for d in wdays:
-        ds     = d.isoformat()
-        emoji  = {"present": "✅", "leave": "🏖"}.get(marked.get(ds), "⬜")
-        future = "—" if d > today else emoji
-        highlight = " ◀️" if d == today else ""
-        lines.append(f"{d.strftime('%d %b')} {d.strftime('%a')[:3]}  {future}{highlight}")
+        ds = d.isoformat()
+        
+        # Color-coded icons
+        if d > today:
+            icon = "➖"
+        else:
+            icon = {"present": "🟢", "leave": "🟠"}.get(marked.get(ds), "⚪")
+            
+        highlight = " ◀️ <i>Today</i>" if d == today else ""
+        
+        # Using <code> makes it a monospace block so icons perfectly align
+        lines.append(f"<code>{d.strftime('%d %b %a')}</code>  {icon}{highlight}")
 
     total_p = sum(1 for v in marked.values() if v == "present")
     total_l = sum(1 for v in marked.values() if v == "leave")
@@ -289,9 +278,9 @@ def handle_status(msg):
     streak = get_streak(uid)
 
     send(uid,
-        f"<b>Your attendance — {date(year, month, 1).strftime('%B %Y')}</b>\n\n"
+        f"📊 <b>Your Attendance — {date(year, month, 1).strftime('%B %Y')}</b>\n\n"
         + "\n".join(lines) + "\n\n"
-        f"Present: {total_p}  |  Leave: {total_l}  |  Unmarked: {unmarked_count}\n\n"
+        f"🟢 <b>Present:</b> {total_p}   🟠 <b>Leave:</b> {total_l}   ⚪ <b>Unmarked:</b> {unmarked_count}\n\n"
         f"{leave_bar(remain)}\n"
         f"Leaves remaining: <b>{remain}</b> / {LEAVES_PER_MONTH}"
         + streak_text(streak),
@@ -328,7 +317,7 @@ def handle_report(msg):
         remain   = max(0, LEAVES_PER_MONTH - on_leave)
         lines.append(
             f"<b>{emp['name']}</b>\n"
-            f"   {present} present  {on_leave} leave  {unmarked} unmarked  {remain} left"
+            f"   🟢 {present} P   🟠 {on_leave} L   ⚪ {unmarked} U   🍃 {remain} left"
         )
 
     # Today's headcount
@@ -343,11 +332,12 @@ def handle_report(msg):
         ).fetchone()["n"]
 
     lines.append(f"\n<b>Today:</b> {today_present} present · {today_leave} on leave · {len(employees)-today_present-today_leave} not yet marked\n")
-    lines.append(f"Dashboard: {WEBHOOK_URL}/dashboard")
+    lines.append(f"🌐 <b>Dashboard:</b> {WEBHOOK_URL}/dashboard")
 
     send(uid, "\n".join(lines), reply_markup=persistent_menu(uid))
 
 def handle_export(msg):
+    """Fixed File Upload logic for Telegram API"""
     uid = msg["from"]["id"]
     if not is_admin(uid):
         send(uid, "Admin only.", reply_markup=persistent_menu(uid)); return
@@ -385,10 +375,25 @@ def handle_export(msg):
 
     csv_text = "\n".join(csv_lines)
     fname    = f"attendance_{year}_{month:02d}.csv"
-    tg("sendDocument", chat_id=uid,
-       document=f"data:text/csv;name={fname},{csv_text}",
-       caption=f"Attendance export for {date(year,month,1).strftime('%B %Y')}",
-       reply_markup=persistent_menu(uid))
+    
+    # 1. Save file locally
+    with open(fname, "w", encoding="utf-8") as f:
+        f.write(csv_text)
+
+    # 2. Upload file directly to Telegram API
+    with open(fname, "rb") as f:
+        requests.post(
+            f"{TG_API}/sendDocument",
+            data={
+                "chat_id": uid,
+                "caption": f"📊 Attendance export for {date(year,month,1).strftime('%B %Y')}",
+                "reply_markup": json.dumps(persistent_menu(uid))
+            },
+            files={"document": f}
+        )
+
+    # 3. Clean up the temporary file
+    os.remove(fname)
 
 # ── Webhook endpoint ──────────────────────────────────────────────────────────
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
@@ -399,7 +404,6 @@ def webhook():
             msg  = update["message"]
             text = msg.get("text","").strip()
 
-            # --- Persistent Keyboard Button Router ---
             if text in ["/start", "/help"]:
                 handle_start(msg)
             elif text in ["✅ Mark Present", "Mark Present"]:
@@ -413,7 +417,6 @@ def webhook():
             elif text in ["📥 Export CSV", "Export CSV", "/export"]:
                 handle_export(msg)
             else:
-                # Any unrecognized message — show the menu
                 handle_start(msg)
 
     except Exception as e:
@@ -423,7 +426,6 @@ def webhook():
 # ── Daily Reminder Endpoint ──────────────────────────────────────────────────
 @app.route("/cron/remind")
 def cron_remind():
-    """Hit this endpoint via external scheduler (e.g. cron-job.org) at 9:30 AM on weekdays."""
     today = date.today()
     if is_weekend(today):
         return jsonify({"skipped": "weekend"})
@@ -451,6 +453,7 @@ def cron_remind():
     return jsonify({"reminded": reminded, "total": len(employees), "already_marked": len(marked_today)})
 
 # ── Admin web dashboard ───────────────────────────────────────────────────────
+# ... (Dashboard HTML stays exactly the same) ...
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -477,7 +480,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 * { box-sizing:border-box; margin:0; padding:0 }
 body { background:var(--bg); color:var(--text); font-family:'Sora',sans-serif; min-height:100vh; }
 
-/* Fade-in animation */
 @keyframes fadeUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 @keyframes countUp { from { opacity:0; transform:scale(.8); } to { opacity:1; transform:scale(1); } }
@@ -504,7 +506,6 @@ h1 { font-size:1.1rem; font-weight:600; letter-spacing:.02em; }
 
 main { max-width:1200px; margin:0 auto; padding:32px 24px; }
 
-/* Search bar */
 .search-wrap { margin-bottom:24px; }
 .search-input { width:100%; max-width:360px; padding:10px 16px 10px 40px; border-radius:8px;
   border:1px solid var(--border); background:var(--surface); color:var(--text);
@@ -523,7 +524,6 @@ main { max-width:1200px; margin:0 auto; padding:32px 24px; }
 .kpi-val { font-size:2.2rem; font-weight:700; font-family:'DM Mono',monospace;
   color:var(--accent-color,var(--accent)); line-height:1; animation:countUp .6s ease both; }
 .kpi-label { font-size:.72rem; color:var(--muted); margin-top:6px; text-transform:uppercase; letter-spacing:.08em; }
-.kpi-sub { font-size:.65rem; color:var(--muted); margin-top:2px; font-family:'DM Mono',monospace; }
 
 section { margin-bottom:36px; }
 h2 { font-size:.85rem; font-weight:600; text-transform:uppercase; letter-spacing:.12em;
@@ -798,7 +798,6 @@ def api_dashboard():
         "today": {"present": today_present, "on_leave": today_leave, "unmarked": today_unmarked}
     })
 
-# ── Setup / health ────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return jsonify({"status": "ok", "bot": "AttendBot", "dashboard": "/dashboard"})
@@ -813,7 +812,6 @@ def setup():
 
 @app.route("/demo/seed")
 def seed_demo():
-    """Seed demo data for the evaluation panel."""
     import random
     demo_employees = [
         (1001, "Arun Kumar",    "arunkumar"),
@@ -837,7 +835,7 @@ def seed_demo():
                        (tid, name, uname))
         for d in wdays:
             for tid, _, _ in demo_employees:
-                if random.random() < 0.05: continue  # ~5% chance of not marking
+                if random.random() < 0.05: continue 
                 status = "leave" if random.random() < 0.12 else "present"
                 db.execute("INSERT OR REPLACE INTO attendance(telegram_id,date,status) VALUES(?,?,?)",
                            (tid, d.isoformat(), status))
