@@ -391,18 +391,15 @@ def webhook():
             text = msg.get("text","").strip()
             uid  = msg["from"]["id"]
 
-            # --- 1. Registration Flow Gatekeeper ---
             if not is_registered(uid):
                 if text == "/start":
                     send(uid, "👋 Welcome to <b>AttendBot</b>!\n\nBefore we begin, please type your <b>Full Legal Name</b> as it should appear on official records:")
                 else:
-                    # Treat whatever they typed as their legal name
                     uname = msg["from"].get("username", "")
                     register(uid, text, uname)
                     send(uid, f"✅ Thank you, <b>{text}</b>! Your profile is set up.\n\nPlease use the menu below to update your status.", reply_markup=persistent_menu(uid))
                 return jsonify(ok=True)
 
-            # --- 2. Button Router (Only for Registered Users) ---
             if text in ["/start", "/help"]:
                 handle_start(msg)
             elif text in ["✅ Mark Present", "Mark Present"]:
@@ -422,37 +419,7 @@ def webhook():
         print(f"Error: {e}")
     return jsonify(ok=True)
 
-# ── Daily Reminder Endpoint ──────────────────────────────────────────────────
-@app.route("/cron/remind")
-def cron_remind():
-    today = date.today()
-    if is_weekend(today):
-        return jsonify({"skipped": "weekend"})
-
-    with get_db() as db:
-        employees = db.execute("SELECT telegram_id, name FROM employees").fetchall()
-        marked_today = set(
-            r["telegram_id"] for r in db.execute(
-                "SELECT telegram_id FROM attendance WHERE date=?",
-                (today.isoformat(),)
-            ).fetchall()
-        )
-
-    reminded = 0
-    for emp in employees:
-        if emp["telegram_id"] not in marked_today:
-            send(emp["telegram_id"],
-                f"Good morning, <b>{emp['name']}</b>!\n\n"
-                f"<b>{today.strftime('%A, %d %B %Y')}</b>\n\n"
-                "Don't forget to mark your attendance — just tap a button below:",
-                reply_markup=persistent_menu(emp["telegram_id"])
-            )
-            reminded += 1
-
-    return jsonify({"reminded": reminded, "total": len(employees), "already_marked": len(marked_today)})
-
 # ── Admin web dashboard ───────────────────────────────────────────────────────
-# ... (Dashboard HTML stays exactly the same) ...
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -600,7 +567,7 @@ h2 { font-size:.85rem; font-weight:600; text-transform:uppercase; letter-spacing
 <main>
   <div class="kpi-grid fade-in" id="kpis"></div>
   <section class="fade-in fade-d1">
-    <h2>Today's Headcount</h2>
+    <h2 id="todayHeader">Today's Headcount</h2>
     <table class="today-table" id="todayTable">
       <thead><tr><th>Employee</th><th>Status</th><th>Marked at</th></tr></thead>
       <tbody id="todayBody"></tbody>
@@ -639,26 +606,59 @@ async function load(){
 
   const t = data.today;
   const total = data.employees.length;
-  const rate = total > 0 ? Math.round((t.present / total) * 100) : 0;
-  const kpiData = [
-    {val: total, label:'Total Employees', color:'#64748b'},
-    {val: t.present,  label:'Present Today',  color:'#4ade80'},
-    {val: t.on_leave, label:'On Leave Today',  color:'#64748b'},
-    {val: t.unmarked, label:'Not Marked Yet',  color:'#64748b'},
-    {val: rate, label:'Attendance Rate', color:'#4ade80', suffix:'%'},
-  ];
-  document.getElementById('kpis').innerHTML = kpiData.map((k,i)=>`
-    <div class="kpi fade-in fade-d${i+1}" style="--accent-color:${k.color}">
-      <div class="kpi-val" data-count="${k.val}">${k.val}${k.suffix||''}</div>
-      <div class="kpi-label">${k.label}</div>
-    </div>`).join('');
+
+  if (t.is_weekend) {
+    const kpiData = [
+      {val: total, label:'Total Employees', color:'#64748b'},
+      {val: '—',  label:'Weekend',  color:'#64748b'},
+      {val: '—',  label:'On Leave Today',  color:'#64748b'},
+      {val: '—',  label:'Not Marked Yet',  color:'#64748b'},
+      {val: '—', label:'Attendance Rate', color:'#64748b'},
+    ];
+    document.getElementById('kpis').innerHTML = kpiData.map((k,i)=>`
+      <div class="kpi fade-in fade-d${i+1}" style="--accent-color:${k.color}">
+        <div class="kpi-val" data-count="${k.val}">${k.val}${k.suffix||''}</div>
+        <div class="kpi-label">${k.label}</div>
+      </div>`).join('');
+
+    document.getElementById('todayTable').style.display = 'none';
+    document.getElementById('todayHeader').style.display = 'none';
+    if (!document.getElementById('weekendBanner')) {
+      document.getElementById('todayTable').insertAdjacentHTML('beforebegin', 
+        '<div id="weekendBanner" style="padding: 24px; text-align: center; background: var(--glass); border: 1px solid var(--border); border-radius: var(--radius); color: var(--muted); font-size: 1.1rem; margin-bottom: 24px;">🌴 It is the weekend! No attendance tracking today.</div>');
+    }
+  } else {
+    const rate = total > 0 ? Math.round((t.present / total) * 100) : 0;
+    const kpiData = [
+      {val: total, label:'Total Employees', color:'#64748b'},
+      {val: t.present,  label:'Present Today',  color:'#4ade80'},
+      {val: t.on_leave, label:'On Leave Today',  color:'#64748b'},
+      {val: t.unmarked, label:'Not Marked Yet',  color:'#64748b'},
+      {val: rate, label:'Attendance Rate', color:'#4ade80', suffix:'%'},
+    ];
+    document.getElementById('kpis').innerHTML = kpiData.map((k,i)=>`
+      <div class="kpi fade-in fade-d${i+1}" style="--accent-color:${k.color}">
+        <div class="kpi-val" data-count="${k.val}">${k.val}${k.suffix||''}</div>
+        <div class="kpi-label">${k.label}</div>
+      </div>`).join('');
+
+    document.getElementById('todayTable').style.display = 'table';
+    document.getElementById('todayHeader').style.display = 'block';
+    const wb = document.getElementById('weekendBanner');
+    if (wb) wb.remove();
+  }
 
   document.querySelectorAll('.kpi-val[data-count]').forEach(el => {
-    const target = parseInt(el.dataset.count);
+    const target = el.dataset.count;
+    if (target === '—') {
+        el.textContent = target;
+        return;
+    }
+    const targetNum = parseInt(target);
     const suffix = el.textContent.includes('%') ? '%' : '';
     el.textContent = '0';
-    animateCount(el, target);
-    if(suffix) setTimeout(()=> el.textContent = target + suffix, 650);
+    animateCount(el, targetNum);
+    if(suffix) setTimeout(()=> el.textContent = targetNum + suffix, 650);
   });
 
   document.getElementById('todayBody').innerHTML = data.employees.map((e,i)=>{
@@ -735,10 +735,6 @@ load();
 </body>
 </html>"""
 
-@app.route("/dashboard")
-def dashboard():
-    return DASHBOARD_HTML
-
 @app.route("/api/dashboard")
 def api_dashboard():
     today = date.today()
@@ -794,7 +790,12 @@ def api_dashboard():
 
     return jsonify({
         "employees": emp_data,
-        "today": {"present": today_present, "on_leave": today_leave, "unmarked": today_unmarked}
+        "today": {
+            "present": today_present, 
+            "on_leave": today_leave, 
+            "unmarked": today_unmarked,
+            "is_weekend": is_weekend(today)
+        }
     })
 
 @app.route("/")
