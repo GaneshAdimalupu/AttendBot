@@ -734,7 +734,10 @@ load();
 </script>
 </body>
 </html>"""
-
+@app.route("/dashboard")
+def dashboard():
+    return DASHBOARD_HTML
+    
 @app.route("/api/dashboard")
 def api_dashboard():
     today = date.today()
