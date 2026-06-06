@@ -159,10 +159,10 @@ def streak_text(streak: int) -> str:
     if streak == 0:
         return ""
     if streak >= 10:
-        return f"\n\n🎉 <b>{streak}-day streak!</b> Incredible dedication!"
+        return f"\n\n<b>{streak}-day streak!</b> Incredible dedication!"
     if streak >= 5:
-        return f"\n\n🔥 <b>{streak}-day streak!</b> Keep it going!"
-    return f"\n\n🔥 {streak}-day streak"
+        return f"\n\n<b>{streak}-day streak!</b> Keep it going!"
+    return f"\n\nStreak: {streak} days"
 
 def leave_bar(remaining: int) -> str:
     """Visual leave balance bar."""
@@ -177,12 +177,12 @@ def handle_start(msg):
     register(uid, name, uname)
 
     send(uid,
-        f"👋 Hi <b>{name}</b>! Welcome to <b>AttendBot</b>.\n\n"
+        f"Hi <b>{name}</b>! Welcome to <b>AttendBot</b>.\n\n"
         "Use the menu below — it only takes <b>one tap</b> to mark attendance!\n\n"
-        "• <b>✅ Mark Present</b> — mark yourself present\n"
-        "• <b>🏖️ Take Leave</b> — mark a leave day\n"
-        "• <b>📊 Check Balance</b> — view your monthly stats\n\n"
-        "That's it — no commands to remember. Just tap! 👇",
+        "• <b>Mark Present</b> — mark yourself present\n"
+        "• <b>Take Leave</b> — mark a leave day\n"
+        "• <b>Check Balance</b> — view your monthly stats\n\n"
+        "Just tap below:",
         reply_markup=persistent_menu(uid)
     )
 
@@ -195,7 +195,7 @@ def handle_direct_mark(msg, status: str):
 
     today = date.today()
     if is_weekend(today):
-        send(uid, "🎉 It's a weekend — no attendance needed.\nEnjoy your break! See you on Monday 👋",
+        send(uid, "It's a weekend — no attendance needed.\nEnjoy your break! See you on Monday.",
              reply_markup=persistent_menu(uid))
         return
 
@@ -203,14 +203,13 @@ def handle_direct_mark(msg, status: str):
 
     # Already marked same status — friendly no-op
     if current == status:
-        emoji = "✅" if status == "present" else "🏖"
         word  = "Present" if status == "present" else "On Leave"
         used   = leave_count(uid, today.year, today.month)
         remain = max(0, LEAVES_PER_MONTH - used)
         streak = get_streak(uid) if status == "present" else 0
         send(uid,
-            f"📅 <b>{today.strftime('%A, %d %B %Y')}</b>\n\n"
-            f"{emoji} You're already marked <b>{word}</b> today!\n"
+            f"<b>{today.strftime('%A, %d %B %Y')}</b>\n\n"
+            f"You're already marked <b>{word}</b> today!\n"
             f"No changes needed.\n\n"
             f"{leave_bar(remain)}\n"
             f"Leaves remaining: <b>{remain}</b> / {LEAVES_PER_MONTH}"
@@ -223,7 +222,7 @@ def handle_direct_mark(msg, status: str):
         used = leave_count(uid, today.year, today.month)
         if current != "leave" and used >= LEAVES_PER_MONTH:
             send(uid,
-                f"❌ Cannot mark Leave — you've used all <b>{LEAVES_PER_MONTH}</b> leaves this month.\n\n"
+                f"Cannot mark Leave — you've used all <b>{LEAVES_PER_MONTH}</b> leaves this month.\n\n"
                 f"{leave_bar(0)}\n"
                 "Contact your admin if you need more.",
                 reply_markup=persistent_menu(uid))
@@ -239,18 +238,17 @@ def handle_direct_mark(msg, status: str):
     # Calculate new balances
     used   = leave_count(uid, today.year, today.month)
     remain = max(0, LEAVES_PER_MONTH - used)
-    emoji  = "✅" if status == "present" else "🏖"
     status_word = "Present" if status == "present" else "On Leave"
     streak = get_streak(uid) if status == "present" else 0
     late_note = " <i>(marked late)</i>" if is_late_mark() else ""
 
     if switched:
-        header = f"🔄 Switched from <b>{old_word}</b> → <b>{status_word}</b>{late_note}"
+        header = f"Switched from <b>{old_word}</b> → <b>{status_word}</b>{late_note}"
     else:
-        header = f"{emoji} <b>Marked as {status_word}</b>{late_note}"
+        header = f"<b>Marked as {status_word}</b>{late_note}"
 
     send(uid,
-        f"📅 <b>{today.strftime('%A, %d %B %Y')}</b>\n\n"
+        f"<b>{today.strftime('%A, %d %B %Y')}</b>\n\n"
         f"{header}\n\n"
         f"{leave_bar(remain)}\n"
         f"Leaves remaining: <b>{remain}</b> / {LEAVES_PER_MONTH}"
@@ -291,9 +289,9 @@ def handle_status(msg):
     streak = get_streak(uid)
 
     send(uid,
-        f"<b>📊 Your attendance — {date(year, month, 1).strftime('%B %Y')}</b>\n\n"
+        f"<b>Your attendance — {date(year, month, 1).strftime('%B %Y')}</b>\n\n"
         + "\n".join(lines) + "\n\n"
-        f"✅ Present: {total_p}  🏖 Leave: {total_l}  ⬜ Unmarked: {unmarked_count}\n\n"
+        f"Present: {total_p}  |  Leave: {total_l}  |  Unmarked: {unmarked_count}\n\n"
         f"{leave_bar(remain)}\n"
         f"Leaves remaining: <b>{remain}</b> / {LEAVES_PER_MONTH}"
         + streak_text(streak),
@@ -303,7 +301,7 @@ def handle_status(msg):
 def handle_report(msg):
     uid = msg["from"]["id"]
     if not is_admin(uid):
-        send(uid, "⛔ Admin only.", reply_markup=persistent_menu(uid)); return
+        send(uid, "Admin only.", reply_markup=persistent_menu(uid)); return
 
     today = date.today()
     year, month = today.year, today.month
@@ -315,7 +313,7 @@ def handle_report(msg):
     if not employees:
         send(uid, "No employees registered yet.", reply_markup=persistent_menu(uid)); return
 
-    lines = [f"<b>📋 Team Report — {date(year,month,1).strftime('%B %Y')}</b> ({today.strftime('%d %b')})\n"]
+    lines = [f"<b>Team Report — {date(year,month,1).strftime('%B %Y')}</b> ({today.strftime('%d %b')})\n"]
     for emp in employees:
         with get_db() as db:
             rows = db.execute(
@@ -329,8 +327,8 @@ def handle_report(msg):
         unmarked = len([d for d in wdays_past if d.isoformat() not in marked])
         remain   = max(0, LEAVES_PER_MONTH - on_leave)
         lines.append(
-            f"👤 <b>{emp['name']}</b>\n"
-            f"   ✅ {present} present  🏖 {on_leave} leave  ⬜ {unmarked} unmarked  🍃 {remain} left"
+            f"<b>{emp['name']}</b>\n"
+            f"   {present} present  {on_leave} leave  {unmarked} unmarked  {remain} left"
         )
 
     # Today's headcount
@@ -345,14 +343,14 @@ def handle_report(msg):
         ).fetchone()["n"]
 
     lines.append(f"\n<b>Today:</b> {today_present} present · {today_leave} on leave · {len(employees)-today_present-today_leave} not yet marked\n")
-    lines.append(f"🌐 <b>Dashboard:</b> {WEBHOOK_URL}/dashboard")
+    lines.append(f"Dashboard: {WEBHOOK_URL}/dashboard")
 
     send(uid, "\n".join(lines), reply_markup=persistent_menu(uid))
 
 def handle_export(msg):
     uid = msg["from"]["id"]
     if not is_admin(uid):
-        send(uid, "⛔ Admin only.", reply_markup=persistent_menu(uid)); return
+        send(uid, "Admin only.", reply_markup=persistent_menu(uid)); return
 
     today = date.today()
     year, month = today.year, today.month
@@ -389,7 +387,7 @@ def handle_export(msg):
     fname    = f"attendance_{year}_{month:02d}.csv"
     tg("sendDocument", chat_id=uid,
        document=f"data:text/csv;name={fname},{csv_text}",
-       caption=f"📊 Attendance export for {date(year,month,1).strftime('%B %Y')}",
+       caption=f"Attendance export for {date(year,month,1).strftime('%B %Y')}",
        reply_markup=persistent_menu(uid))
 
 # ── Webhook endpoint ──────────────────────────────────────────────────────────
@@ -404,15 +402,15 @@ def webhook():
             # --- Persistent Keyboard Button Router ---
             if text in ["/start", "/help"]:
                 handle_start(msg)
-            elif text == "✅ Mark Present":
+            elif text in ["✅ Mark Present", "Mark Present"]:
                 handle_direct_mark(msg, "present")
-            elif text == "🏖️ Take Leave":
+            elif text in ["🏖️ Take Leave", "Take Leave"]:
                 handle_direct_mark(msg, "leave")
-            elif text in ["📊 Check Balance", "/status", "/leaves"]:
+            elif text in ["📊 Check Balance", "Check Balance", "/status", "/leaves"]:
                 handle_status(msg)
-            elif text in ["📋 Admin Report", "/report"]:
+            elif text in ["📋 Admin Report", "Admin Report", "/report"]:
                 handle_report(msg)
-            elif text in ["📥 Export CSV", "/export"]:
+            elif text in ["📥 Export CSV", "Export CSV", "/export"]:
                 handle_export(msg)
             else:
                 # Any unrecognized message — show the menu
@@ -443,9 +441,9 @@ def cron_remind():
     for emp in employees:
         if emp["telegram_id"] not in marked_today:
             send(emp["telegram_id"],
-                f"⏰ Good morning, <b>{emp['name']}</b>!\n\n"
-                f"📅 <b>{today.strftime('%A, %d %B %Y')}</b>\n\n"
-                "Don't forget to mark your attendance — just tap a button below 👇",
+                f"Good morning, <b>{emp['name']}</b>!\n\n"
+                f"<b>{today.strftime('%A, %d %B %Y')}</b>\n\n"
+                "Don't forget to mark your attendance — just tap a button below:",
                 reply_markup=persistent_menu(emp["telegram_id"])
             )
             reminded += 1
@@ -466,13 +464,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   --surface: #151820;
   --border: #1e2330;
   --accent: #4ade80;
-  --accent2: #f59e0b;
+  --accent2: #64748b;
   --danger: #f87171;
   --text: #e2e8f0;
   --muted: #64748b;
   --present: #4ade80;
-  --leave: #f59e0b;
-  --unmarked: #334155;
+  --leave: #64748b;
+  --unmarked: #1e2330;
   --radius: 12px;
   --glass: rgba(21,24,32,.7);
 }
@@ -495,13 +493,13 @@ header {
   backdrop-filter:blur(12px);
 }
 .logo { display:flex; align-items:center; gap:10px; }
-.logo-icon { width:36px; height:36px; background:linear-gradient(135deg,#4ade80,#22d3ee); border-radius:8px;
+.logo-icon { width:36px; height:36px; background:var(--border); border-radius:8px;
   display:flex; align-items:center; justify-content:center; font-size:18px; }
 h1 { font-size:1.1rem; font-weight:600; letter-spacing:.02em; }
 .subtitle { font-size:.75rem; color:var(--muted); }
 .header-right { display:flex; align-items:center; gap:12px; }
 .month-badge { background:var(--border); padding:6px 14px; border-radius:20px;
-  font-family:'DM Mono',monospace; font-size:.8rem; color:var(--accent); }
+  font-family:'DM Mono',monospace; font-size:.8rem; color:var(--text); }
 .live-dot { width:8px; height:8px; background:var(--accent); border-radius:50%; animation:pulse 2s infinite; display:inline-block; }
 
 main { max-width:1200px; margin:0 auto; padding:32px 24px; }
@@ -546,10 +544,10 @@ h2 { font-size:.85rem; font-weight:600; text-transform:uppercase; letter-spacing
 .stat-val { font-size:1.2rem; font-weight:700; font-family:'DM Mono',monospace; }
 .stat-key { font-size:.65rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-top:2px; }
 .s-p { color:var(--present); } .s-l { color:var(--leave); }
-.s-u { color:var(--muted); } .s-r { color:#818cf8; }
+.s-u { color:var(--muted); } .s-r { color:var(--muted); }
 
 .leave-bar { height:6px; background:var(--bg); border-radius:3px; overflow:hidden; }
-.leave-fill { height:100%; background:linear-gradient(90deg,var(--present),#22d3ee); border-radius:3px; transition:width .8s ease; }
+.leave-fill { height:100%; background:var(--present); border-radius:3px; transition:width .8s ease; }
 .leave-meta { display:flex; justify-content:space-between; font-size:.7rem; color:var(--muted); margin-top:4px; }
 
 .cal-strip { display:flex; flex-wrap:wrap; gap:4px; margin-top:10px; }
@@ -616,8 +614,7 @@ h2 { font-size:.85rem; font-weight:600; text-transform:uppercase; letter-spacing
   </section>
 </main>
 <script>
-const COLORS = ['#4ade80','#f59e0b','#818cf8','#f472b6','#22d3ee',
-                '#a78bfa','#fb923c','#34d399','#e879f9','#facc15'];
+const COLORS = ['#64748b'];
 
 function animateCount(el, target) {
   let start = 0; const dur = 600; const t0 = performance.now();
@@ -645,11 +642,11 @@ async function load(){
   const total = data.employees.length;
   const rate = total > 0 ? Math.round((t.present / total) * 100) : 0;
   const kpiData = [
-    {val: total, label:'Total Employees', color:'#818cf8'},
+    {val: total, label:'Total Employees', color:'#64748b'},
     {val: t.present,  label:'Present Today',  color:'#4ade80'},
-    {val: t.on_leave, label:'On Leave Today',  color:'#f59e0b'},
+    {val: t.on_leave, label:'On Leave Today',  color:'#64748b'},
     {val: t.unmarked, label:'Not Marked Yet',  color:'#64748b'},
-    {val: rate, label:'Attendance Rate', color:'#22d3ee', suffix:'%'},
+    {val: rate, label:'Attendance Rate', color:'#4ade80', suffix:'%'},
   ];
   document.getElementById('kpis').innerHTML = kpiData.map((k,i)=>`
     <div class="kpi fade-in fade-d${i+1}" style="--accent-color:${k.color}">
@@ -668,7 +665,7 @@ async function load(){
   document.getElementById('todayBody').innerHTML = data.employees.map((e,i)=>{
     const att = e.today_status;
     const badgeCls = att==='present'?'b-present':att==='leave'?'b-leave':'b-unmarked';
-    const badgeTxt = att==='present'?'✅ Present':att==='leave'?'🏖 On Leave':'⬜ Not Marked';
+    const badgeTxt = att==='present'?'Present':att==='leave'?'On Leave':'Not Marked';
     const time = e.today_time ? new Date(e.today_time).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}) : '—';
     return `<tr>
       <td style="display:flex;align-items:center;gap:10px;">
