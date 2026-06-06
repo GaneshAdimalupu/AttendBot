@@ -2,8 +2,8 @@
 TinkerHub Attendance Bot
 ========================
 A Telegram bot for frictionless daily attendance marking.
-Each employee taps Present / On Leave once per working day.
-Admins get full visibility via /report and the web dashboard.
+Upgraded with a Persistent Reply Keyboard for zero-friction UX.
+Admins get full visibility via the web dashboard.
 """
 
 import os, sqlite3, json
@@ -60,10 +60,6 @@ def send(chat_id, text, **kwargs):
 def answer_cbq(callback_query_id, text=""):
     return tg("answerCallbackQuery", callback_query_id=callback_query_id, text=text)
 
-def edit_msg(chat_id, message_id, text, **kwargs):
-    return tg("editMessageText", chat_id=chat_id, message_id=message_id,
-              text=text, parse_mode="HTML", **kwargs)
-
 # ── Business logic ────────────────────────────────────────────────────────────
 def is_weekend(d: date) -> bool:
     return d.weekday() >= 5   # Saturday=5, Sunday=6
@@ -117,28 +113,61 @@ def is_employee(telegram_id: int) -> bool:
 def is_admin(telegram_id: int) -> bool:
     return telegram_id in ADMIN_IDS
 
+def get_streak(telegram_id: int) -> int:
+    """Calculate consecutive working-day present streak ending today or yesterday."""
+    today = date.today()
+    streak = 0
+    d = today
+    while True:
+        if is_weekend(d):
+            d -= timedelta(days=1)
+            continue
+        with get_db() as db:
+            row = db.execute(
+                "SELECT status FROM attendance WHERE telegram_id=? AND date=?",
+                (telegram_id, d.isoformat())
+            ).fetchone()
+        if row and row["status"] == "present":
+            streak += 1
+            d -= timedelta(days=1)
+        else:
+            break
+    return streak
+
+def is_late_mark() -> bool:
+    """Returns True if current time is after 11:00 AM."""
+    now = datetime.now()
+    return now.hour >= 11
+
 # ── Message/button builders ───────────────────────────────────────────────────
-def attendance_keyboard(d: date, current: str | None = None):
-    today_str = d.isoformat()
-    p_label = "✅ Present" if current == "present" else "Present"
-    l_label = "🏖 On Leave" if current == "leave"   else "On Leave"
+def persistent_menu(telegram_id: int):
+    """Generates the Zero-Friction Persistent Keyboard."""
+    keyboard = [
+        [{"text": "✅ Mark Present"}, {"text": "🏖️ Take Leave"}],
+        [{"text": "📊 Check Balance"}]
+    ]
+    if is_admin(telegram_id):
+        keyboard.append([{"text": "📋 Admin Report"}, {"text": "📥 Export CSV"}])
     return {
-        "inline_keyboard": [[
-            {"text": p_label, "callback_data": f"mark|present|{today_str}"},
-            {"text": l_label, "callback_data": f"mark|leave|{today_str}"},
-        ]]
+        "keyboard": keyboard,
+        "resize_keyboard": True,
+        "is_persistent": True
     }
 
-def leaves_summary(telegram_id: int, year: int, month: int) -> str:
-    used   = leave_count(telegram_id, year, month)
-    remain = max(0, LEAVES_PER_MONTH - used)
-    month_name = date(year, month, 1).strftime("%B %Y")
-    bar = "🟩" * remain + "⬜" * used
-    return (
-        f"<b>Leave balance — {month_name}</b>\n\n"
-        f"{bar}\n"
-        f"Remaining: <b>{remain}</b>  |  Used: <b>{used}</b>  |  Allowance: {LEAVES_PER_MONTH}"
-    )
+def streak_text(streak: int) -> str:
+    """Generate streak display text."""
+    if streak == 0:
+        return ""
+    if streak >= 10:
+        return f"\n\n🎉 <b>{streak}-day streak!</b> Incredible dedication!"
+    if streak >= 5:
+        return f"\n\n🔥 <b>{streak}-day streak!</b> Keep it going!"
+    return f"\n\n🔥 {streak}-day streak"
+
+def leave_bar(remaining: int) -> str:
+    """Visual leave balance bar."""
+    used = LEAVES_PER_MONTH - remaining
+    return "🟩" * remaining + "⬜" * used
 
 # ── Command / callback handlers ───────────────────────────────────────────────
 def handle_start(msg):
@@ -146,18 +175,19 @@ def handle_start(msg):
     name  = (msg["from"].get("first_name","") + " " + msg["from"].get("last_name","")).strip()
     uname = msg["from"].get("username","")
     register(uid, name, uname)
+
     send(uid,
         f"👋 Hi <b>{name}</b>! Welcome to <b>AttendBot</b>.\n\n"
-        "Every working day, just tap one button to mark your status.\n\n"
-        "Commands:\n"
-        "/mark — Mark today's attendance\n"
-        "/status — Your attendance this month\n"
-        "/leaves — Your leave balance\n"
-        "/help — Show this message\n\n"
-        + ("/report — Team report (admin)\n/export — CSV export (admin)\n" if is_admin(uid) else "")
+        "Use the menu below — it only takes <b>one tap</b> to mark attendance!\n\n"
+        "• <b>✅ Mark Present</b> — mark yourself present\n"
+        "• <b>🏖️ Take Leave</b> — mark a leave day\n"
+        "• <b>📊 Check Balance</b> — view your monthly stats\n\n"
+        "That's it — no commands to remember. Just tap! 👇",
+        reply_markup=persistent_menu(uid)
     )
 
-def handle_mark(msg):
+def handle_direct_mark(msg, status: str):
+    """Handles direct clicks from the persistent menu."""
     uid  = msg["from"]["id"]
     name = (msg["from"].get("first_name","") + " " + msg["from"].get("last_name","")).strip()
     uname = msg["from"].get("username","")
@@ -165,25 +195,68 @@ def handle_mark(msg):
 
     today = date.today()
     if is_weekend(today):
-        send(uid, "🎉 It's a weekend — no attendance needed. Enjoy your break!")
+        send(uid, "🎉 It's a weekend — no attendance needed.\nEnjoy your break! See you on Monday 👋",
+             reply_markup=persistent_menu(uid))
         return
 
     current = already_marked(uid, today)
-    date_label = today.strftime("%A, %d %B %Y")
-    status_line = f"\nCurrently marked: <b>{'✅ Present' if current=='present' else '🏖 On Leave'}</b>" if current else ""
+
+    # Already marked same status — friendly no-op
+    if current == status:
+        emoji = "✅" if status == "present" else "🏖"
+        word  = "Present" if status == "present" else "On Leave"
+        used   = leave_count(uid, today.year, today.month)
+        remain = max(0, LEAVES_PER_MONTH - used)
+        streak = get_streak(uid) if status == "present" else 0
+        send(uid,
+            f"📅 <b>{today.strftime('%A, %d %B %Y')}</b>\n\n"
+            f"{emoji} You're already marked <b>{word}</b> today!\n"
+            f"No changes needed.\n\n"
+            f"{leave_bar(remain)}\n"
+            f"Leaves remaining: <b>{remain}</b> / {LEAVES_PER_MONTH}"
+            + streak_text(streak),
+            reply_markup=persistent_menu(uid))
+        return
+
+    # Check leave limits
+    if status == "leave":
+        used = leave_count(uid, today.year, today.month)
+        if current != "leave" and used >= LEAVES_PER_MONTH:
+            send(uid,
+                f"❌ Cannot mark Leave — you've used all <b>{LEAVES_PER_MONTH}</b> leaves this month.\n\n"
+                f"{leave_bar(0)}\n"
+                "Contact your admin if you need more.",
+                reply_markup=persistent_menu(uid))
+            return
+
+    # Detect switch
+    switched = current is not None and current != status
+    old_word = "Present" if current == "present" else "On Leave" if current else None
+
+    # Process the mark
+    mark(uid, today, status)
+
+    # Calculate new balances
+    used   = leave_count(uid, today.year, today.month)
+    remain = max(0, LEAVES_PER_MONTH - used)
+    emoji  = "✅" if status == "present" else "🏖"
+    status_word = "Present" if status == "present" else "On Leave"
+    streak = get_streak(uid) if status == "present" else 0
+    late_note = " <i>(marked late)</i>" if is_late_mark() else ""
+
+    if switched:
+        header = f"🔄 Switched from <b>{old_word}</b> → <b>{status_word}</b>{late_note}"
+    else:
+        header = f"{emoji} <b>Marked as {status_word}</b>{late_note}"
 
     send(uid,
-        f"📅 <b>{date_label}</b>{status_line}\n\nMark your attendance for today:",
-        reply_markup=attendance_keyboard(today, current)
+        f"📅 <b>{today.strftime('%A, %d %B %Y')}</b>\n\n"
+        f"{header}\n\n"
+        f"{leave_bar(remain)}\n"
+        f"Leaves remaining: <b>{remain}</b> / {LEAVES_PER_MONTH}"
+        + streak_text(streak),
+        reply_markup=persistent_menu(uid)
     )
-
-def handle_leaves(msg):
-    uid = msg["from"]["id"]
-    name = (msg["from"].get("first_name","") + " " + msg["from"].get("last_name","")).strip()
-    uname = msg["from"].get("username","")
-    register(uid, name, uname)
-    today = date.today()
-    send(uid, leaves_summary(uid, today.year, today.month))
 
 def handle_status(msg):
     uid = msg["from"]["id"]
@@ -208,23 +281,29 @@ def handle_status(msg):
         ds     = d.isoformat()
         emoji  = {"present": "✅", "leave": "🏖"}.get(marked.get(ds), "⬜")
         future = "—" if d > today else emoji
-        lines.append(f"{d.strftime('%d %b')} {d.strftime('%a')[:3]}  {future}")
+        highlight = " ◀️" if d == today else ""
+        lines.append(f"{d.strftime('%d %b')} {d.strftime('%a')[:3]}  {future}{highlight}")
 
     total_p = sum(1 for v in marked.values() if v == "present")
     total_l = sum(1 for v in marked.values() if v == "leave")
     remain  = max(0, LEAVES_PER_MONTH - total_l)
+    unmarked_count = len([d for d in wdays if d <= today and d.isoformat() not in marked])
+    streak = get_streak(uid)
 
     send(uid,
-        f"<b>Your attendance — {date(year, month, 1).strftime('%B %Y')}</b>\n\n"
+        f"<b>📊 Your attendance — {date(year, month, 1).strftime('%B %Y')}</b>\n\n"
         + "\n".join(lines) + "\n\n"
-        f"✅ Present: {total_p}  🏖 Leave: {total_l}  ⬜ Unmarked: {len([d for d in wdays if d <= today and d.isoformat() not in marked])}\n"
-        f"Leaves remaining this month: <b>{remain}</b>"
+        f"✅ Present: {total_p}  🏖 Leave: {total_l}  ⬜ Unmarked: {unmarked_count}\n\n"
+        f"{leave_bar(remain)}\n"
+        f"Leaves remaining: <b>{remain}</b> / {LEAVES_PER_MONTH}"
+        + streak_text(streak),
+        reply_markup=persistent_menu(uid)
     )
 
 def handle_report(msg):
     uid = msg["from"]["id"]
     if not is_admin(uid):
-        send(uid, "⛔ Admin only."); return
+        send(uid, "⛔ Admin only.", reply_markup=persistent_menu(uid)); return
 
     today = date.today()
     year, month = today.year, today.month
@@ -234,9 +313,9 @@ def handle_report(msg):
         employees = db.execute("SELECT * FROM employees ORDER BY name").fetchall()
 
     if not employees:
-        send(uid, "No employees registered yet."); return
+        send(uid, "No employees registered yet.", reply_markup=persistent_menu(uid)); return
 
-    lines = [f"<b>Team Report — {date(year,month,1).strftime('%B %Y')}</b> ({today.strftime('%d %b')})\n"]
+    lines = [f"<b>📋 Team Report — {date(year,month,1).strftime('%B %Y')}</b> ({today.strftime('%d %b')})\n"]
     for emp in employees:
         with get_db() as db:
             rows = db.execute(
@@ -249,7 +328,6 @@ def handle_report(msg):
         on_leave = sum(1 for v in marked.values() if v == "leave")
         unmarked = len([d for d in wdays_past if d.isoformat() not in marked])
         remain   = max(0, LEAVES_PER_MONTH - on_leave)
-        name     = emp["name"][:15].ljust(15)
         lines.append(
             f"👤 <b>{emp['name']}</b>\n"
             f"   ✅ {present} present  🏖 {on_leave} leave  ⬜ {unmarked} unmarked  🍃 {remain} left"
@@ -266,13 +344,15 @@ def handle_report(msg):
             (today.isoformat(),)
         ).fetchone()["n"]
 
-    lines.append(f"\n<b>Today:</b> {today_present} present · {today_leave} on leave · {len(employees)-today_present-today_leave} not yet marked")
-    send(uid, "\n".join(lines))
+    lines.append(f"\n<b>Today:</b> {today_present} present · {today_leave} on leave · {len(employees)-today_present-today_leave} not yet marked\n")
+    lines.append(f"🌐 <b>Dashboard:</b> {WEBHOOK_URL}/dashboard")
+
+    send(uid, "\n".join(lines), reply_markup=persistent_menu(uid))
 
 def handle_export(msg):
     uid = msg["from"]["id"]
     if not is_admin(uid):
-        send(uid, "⛔ Admin only."); return
+        send(uid, "⛔ Admin only.", reply_markup=persistent_menu(uid)); return
 
     today = date.today()
     year, month = today.year, today.month
@@ -309,42 +389,8 @@ def handle_export(msg):
     fname    = f"attendance_{year}_{month:02d}.csv"
     tg("sendDocument", chat_id=uid,
        document=f"data:text/csv;name={fname},{csv_text}",
-       caption=f"Attendance export for {date(year,month,1).strftime('%B %Y')}")
-    # Fallback: send as message
-    send(uid, f"<pre>{csv_text[:3000]}</pre>")
-
-def handle_callback(cbq):
-    uid     = cbq["from"]["id"]
-    data    = cbq["data"]
-    chat_id = cbq["message"]["chat"]["id"]
-    msg_id  = cbq["message"]["message_id"]
-    name    = (cbq["from"].get("first_name","") + " " + cbq["from"].get("last_name","")).strip()
-    uname   = cbq["from"].get("username","")
-    register(uid, name, uname)
-
-    if data.startswith("mark|"):
-        _, status, date_str = data.split("|")
-        d = date.fromisoformat(date_str)
-        today = date.today()
-
-        if d != today:
-            answer_cbq(cbq["id"], "❌ This is for a past date — attendance already closed.")
-            return
-
-        mark(uid, d, status)
-
-        used   = leave_count(uid, today.year, today.month)
-        remain = max(0, LEAVES_PER_MONTH - used)
-        emoji  = "✅" if status == "present" else "🏖"
-        status_word = "Present" if status == "present" else "On Leave"
-
-        answer_cbq(cbq["id"], f"{emoji} Marked as {status_word}!")
-        edit_msg(chat_id, msg_id,
-            f"📅 <b>{d.strftime('%A, %d %B %Y')}</b>\n\n"
-            f"{emoji} <b>Marked as {status_word}</b>\n\n"
-            f"Leaves remaining this month: <b>{remain}</b> / {LEAVES_PER_MONTH}",
-            reply_markup=attendance_keyboard(d, status)
-        )
+       caption=f"📊 Attendance export for {date(year,month,1).strftime('%B %Y')}",
+       reply_markup=persistent_menu(uid))
 
 # ── Webhook endpoint ──────────────────────────────────────────────────────────
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
@@ -354,22 +400,57 @@ def webhook():
         if "message" in update:
             msg  = update["message"]
             text = msg.get("text","").strip()
-            if   text.startswith("/start"):  handle_start(msg)
-            elif text.startswith("/mark"):   handle_mark(msg)
-            elif text.startswith("/leaves"): handle_leaves(msg)
-            elif text.startswith("/status"): handle_status(msg)
-            elif text.startswith("/report"): handle_report(msg)
-            elif text.startswith("/export"): handle_export(msg)
-            elif text.startswith("/help"):   handle_start(msg)
-            else:
-                handle_mark(msg)   # Any non-command message triggers mark
 
-        elif "callback_query" in update:
-            handle_callback(update["callback_query"])
+            # --- Persistent Keyboard Button Router ---
+            if text in ["/start", "/help"]:
+                handle_start(msg)
+            elif text == "✅ Mark Present":
+                handle_direct_mark(msg, "present")
+            elif text == "🏖️ Take Leave":
+                handle_direct_mark(msg, "leave")
+            elif text in ["📊 Check Balance", "/status", "/leaves"]:
+                handle_status(msg)
+            elif text in ["📋 Admin Report", "/report"]:
+                handle_report(msg)
+            elif text in ["📥 Export CSV", "/export"]:
+                handle_export(msg)
+            else:
+                # Any unrecognized message — show the menu
+                handle_start(msg)
 
     except Exception as e:
         print(f"Error: {e}")
     return jsonify(ok=True)
+
+# ── Daily Reminder Endpoint ──────────────────────────────────────────────────
+@app.route("/cron/remind")
+def cron_remind():
+    """Hit this endpoint via external scheduler (e.g. cron-job.org) at 9:30 AM on weekdays."""
+    today = date.today()
+    if is_weekend(today):
+        return jsonify({"skipped": "weekend"})
+
+    with get_db() as db:
+        employees = db.execute("SELECT telegram_id, name FROM employees").fetchall()
+        marked_today = set(
+            r["telegram_id"] for r in db.execute(
+                "SELECT telegram_id FROM attendance WHERE date=?",
+                (today.isoformat(),)
+            ).fetchall()
+        )
+
+    reminded = 0
+    for emp in employees:
+        if emp["telegram_id"] not in marked_today:
+            send(emp["telegram_id"],
+                f"⏰ Good morning, <b>{emp['name']}</b>!\n\n"
+                f"📅 <b>{today.strftime('%A, %d %B %Y')}</b>\n\n"
+                "Don't forget to mark your attendance — just tap a button below 👇",
+                reply_markup=persistent_menu(emp["telegram_id"])
+            )
+            reminded += 1
+
+    return jsonify({"reminded": reminded, "total": len(employees), "already_marked": len(marked_today)})
 
 # ── Admin web dashboard ───────────────────────────────────────────────────────
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -392,76 +473,106 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   --present: #4ade80;
   --leave: #f59e0b;
   --unmarked: #334155;
-  --radius: 10px;
+  --radius: 12px;
+  --glass: rgba(21,24,32,.7);
 }
 * { box-sizing:border-box; margin:0; padding:0 }
 body { background:var(--bg); color:var(--text); font-family:'Sora',sans-serif; min-height:100vh; }
 
+/* Fade-in animation */
+@keyframes fadeUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+@keyframes countUp { from { opacity:0; transform:scale(.8); } to { opacity:1; transform:scale(1); } }
+.fade-in { animation: fadeUp .5s ease both; }
+.fade-d1 { animation-delay:.1s } .fade-d2 { animation-delay:.2s }
+.fade-d3 { animation-delay:.3s } .fade-d4 { animation-delay:.4s }
+
 header {
   padding:20px 32px;
-  display:flex; align-items:center; justify-content:space-between;
+  display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;
   border-bottom:1px solid var(--border);
   background:var(--surface);
+  backdrop-filter:blur(12px);
 }
 .logo { display:flex; align-items:center; gap:10px; }
-.logo-icon { width:36px; height:36px; background:var(--accent); border-radius:8px;
+.logo-icon { width:36px; height:36px; background:linear-gradient(135deg,#4ade80,#22d3ee); border-radius:8px;
   display:flex; align-items:center; justify-content:center; font-size:18px; }
 h1 { font-size:1.1rem; font-weight:600; letter-spacing:.02em; }
 .subtitle { font-size:.75rem; color:var(--muted); }
+.header-right { display:flex; align-items:center; gap:12px; }
 .month-badge { background:var(--border); padding:6px 14px; border-radius:20px;
   font-family:'DM Mono',monospace; font-size:.8rem; color:var(--accent); }
+.live-dot { width:8px; height:8px; background:var(--accent); border-radius:50%; animation:pulse 2s infinite; display:inline-block; }
 
 main { max-width:1200px; margin:0 auto; padding:32px 24px; }
 
+/* Search bar */
+.search-wrap { margin-bottom:24px; }
+.search-input { width:100%; max-width:360px; padding:10px 16px 10px 40px; border-radius:8px;
+  border:1px solid var(--border); background:var(--surface); color:var(--text);
+  font-family:'Sora',sans-serif; font-size:.85rem; outline:none; transition:border .2s; }
+.search-input:focus { border-color:var(--accent); }
+.search-wrap { position:relative; }
+.search-wrap::before { content:'🔍'; position:absolute; left:14px; top:50%; transform:translateY(-50%); font-size:.8rem; }
+
 .kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:16px; margin-bottom:32px; }
-.kpi { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
-  padding:20px; position:relative; overflow:hidden; }
-.kpi::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; background:var(--accent-color,var(--accent)); }
-.kpi-val { font-size:2.2rem; font-weight:700; font-family:'DM Mono',monospace; color:var(--accent-color,var(--accent)); line-height:1; }
+.kpi { background:var(--glass); backdrop-filter:blur(10px); border:1px solid var(--border);
+  border-radius:var(--radius); padding:20px; position:relative; overflow:hidden;
+  transition:transform .2s, box-shadow .2s; }
+.kpi:hover { transform:translateY(-2px); box-shadow:0 8px 24px rgba(0,0,0,.3); }
+.kpi::before { content:''; position:absolute; top:0; left:0; right:0; height:3px;
+  background:linear-gradient(90deg,var(--accent-color,var(--accent)),transparent); }
+.kpi-val { font-size:2.2rem; font-weight:700; font-family:'DM Mono',monospace;
+  color:var(--accent-color,var(--accent)); line-height:1; animation:countUp .6s ease both; }
 .kpi-label { font-size:.72rem; color:var(--muted); margin-top:6px; text-transform:uppercase; letter-spacing:.08em; }
+.kpi-sub { font-size:.65rem; color:var(--muted); margin-top:2px; font-family:'DM Mono',monospace; }
 
 section { margin-bottom:36px; }
 h2 { font-size:.85rem; font-weight:600; text-transform:uppercase; letter-spacing:.12em;
   color:var(--muted); margin-bottom:16px; padding-bottom:8px; border-bottom:1px solid var(--border); }
 
-/* Team grid */
 .team-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:16px; }
-.emp-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px; }
+.emp-card { background:var(--glass); backdrop-filter:blur(10px); border:1px solid var(--border);
+  border-radius:var(--radius); padding:18px; transition:transform .2s, box-shadow .2s, border-color .2s; }
+.emp-card:hover { transform:translateY(-3px); box-shadow:0 12px 32px rgba(0,0,0,.25); border-color:var(--accent)33; }
 .emp-top { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
 .avatar { width:40px; height:40px; border-radius:50%; display:flex; align-items:center;
-  justify-content:center; font-size:1rem; font-weight:700; flex-shrink:0; }
+  justify-content:center; font-size:1rem; font-weight:700; flex-shrink:0; transition:transform .2s; }
+.emp-card:hover .avatar { transform:scale(1.1); }
 .emp-name { font-weight:600; font-size:.95rem; }
 .emp-handle { font-size:.75rem; color:var(--muted); }
 .stat-row { display:flex; gap:8px; margin-bottom:10px; }
 .stat { flex:1; background:var(--bg); border-radius:6px; padding:8px; text-align:center; }
 .stat-val { font-size:1.2rem; font-weight:700; font-family:'DM Mono',monospace; }
 .stat-key { font-size:.65rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-top:2px; }
-.s-p { color:var(--present); }
-.s-l { color:var(--leave); }
-.s-u { color:var(--muted); }
-.s-r { color:#818cf8; }
+.s-p { color:var(--present); } .s-l { color:var(--leave); }
+.s-u { color:var(--muted); } .s-r { color:#818cf8; }
 
-/* Leave bar */
 .leave-bar { height:6px; background:var(--bg); border-radius:3px; overflow:hidden; }
-.leave-fill { height:100%; background:var(--present); border-radius:3px; transition:width .5s; }
+.leave-fill { height:100%; background:linear-gradient(90deg,var(--present),#22d3ee); border-radius:3px; transition:width .8s ease; }
 .leave-meta { display:flex; justify-content:space-between; font-size:.7rem; color:var(--muted); margin-top:4px; }
 
-/* Calendar strip */
 .cal-strip { display:flex; flex-wrap:wrap; gap:4px; margin-top:10px; }
 .cal-day { width:26px; height:26px; border-radius:5px; display:flex; align-items:center;
-  justify-content:center; font-size:.6rem; font-family:'DM Mono',monospace; font-weight:500; }
+  justify-content:center; font-size:.6rem; font-family:'DM Mono',monospace; font-weight:500;
+  transition:transform .15s; cursor:default; position:relative; }
+.cal-day:hover { transform:scale(1.3); z-index:2; }
+.cal-day[data-tip]:hover::after { content:attr(data-tip); position:absolute; bottom:110%; left:50%;
+  transform:translateX(-50%); background:#1e2330; color:var(--text); padding:3px 8px;
+  border-radius:4px; font-size:.6rem; white-space:nowrap; z-index:10; pointer-events:none; }
 .cd-p { background:rgba(74,222,128,.2); color:var(--present); }
 .cd-l { background:rgba(245,158,11,.2); color:var(--leave); }
 .cd-u { background:var(--unmarked); color:var(--muted); }
 .cd-w { background:transparent; color:#1e2330; }
 .cd-f { background:var(--border); color:var(--border); }
 
-/* Today table */
 .today-table { width:100%; border-collapse:collapse; font-size:.875rem; }
 .today-table th { text-align:left; padding:10px 14px; background:var(--border);
   font-size:.7rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
 .today-table td { padding:10px 14px; border-bottom:1px solid var(--border); }
 .today-table tr:last-child td { border:none; }
+.today-table tr { transition:background .15s; }
+.today-table tbody tr:hover { background:rgba(74,222,128,.04); }
 .badge { display:inline-flex; align-items:center; gap:5px; padding:3px 10px;
   border-radius:20px; font-size:.75rem; font-weight:600; }
 .b-present { background:rgba(74,222,128,.15); color:var(--present); }
@@ -472,7 +583,7 @@ h2 { font-size:.85rem; font-weight:600; text-transform:uppercase; letter-spacing
 .refresh a { color:var(--accent); text-decoration:none; }
 .refresh a:hover { text-decoration:underline; }
 
-@media(max-width:600px){ main{padding:16px 12px} .kpi-val{font-size:1.8rem} }
+@media(max-width:600px){ main{padding:16px 12px} .kpi-val{font-size:1.8rem} .header-right{flex-wrap:wrap} }
 </style>
 </head>
 <body>
@@ -484,22 +595,23 @@ h2 { font-size:.85rem; font-weight:600; text-transform:uppercase; letter-spacing
       <div class="subtitle">Attendance &amp; Leave Dashboard</div>
     </div>
   </div>
-  <div style="display:flex;align-items:center;gap:12px;">
+  <div class="header-right">
     <span class="month-badge" id="monthBadge"></span>
-    <span class="refresh">Auto-refreshes · <a href="javascript:location.reload()">Refresh now</a></span>
+    <span class="refresh"><span class="live-dot"></span> Live · <a href="javascript:location.reload()">Refresh</a></span>
   </div>
 </header>
 <main>
-  <div class="kpi-grid" id="kpis"></div>
-  <section>
+  <div class="kpi-grid fade-in" id="kpis"></div>
+  <section class="fade-in fade-d1">
     <h2>Today's Headcount</h2>
     <table class="today-table" id="todayTable">
       <thead><tr><th>Employee</th><th>Status</th><th>Marked at</th></tr></thead>
       <tbody id="todayBody"></tbody>
     </table>
   </section>
-  <section>
+  <section class="fade-in fade-d2">
     <h2>Monthly Overview</h2>
+    <div class="search-wrap"><input type="text" class="search-input" id="searchInput" placeholder="Search employees..."></div>
     <div class="team-grid" id="teamGrid"></div>
   </section>
 </main>
@@ -507,31 +619,52 @@ h2 { font-size:.85rem; font-weight:600; text-transform:uppercase; letter-spacing
 const COLORS = ['#4ade80','#f59e0b','#818cf8','#f472b6','#22d3ee',
                 '#a78bfa','#fb923c','#34d399','#e879f9','#facc15'];
 
+function animateCount(el, target) {
+  let start = 0; const dur = 600; const t0 = performance.now();
+  function step(now) {
+    const p = Math.min((now - t0) / dur, 1);
+    el.textContent = Math.round(p * target);
+    if (p < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+let allData = null;
+
 async function load(){
   const data = await fetch('/api/dashboard').then(r=>r.json());
+  allData = data;
   const today = new Date().toISOString().slice(0,10);
   const [year,month] = today.split('-').map(Number);
   const daysInMonth = new Date(year, month, 0).getDate();
 
-  // Month badge
   document.getElementById('monthBadge').textContent =
     new Date(year,month-1,1).toLocaleString('default',{month:'long',year:'numeric'});
 
-  // KPIs
   const t = data.today;
+  const total = data.employees.length;
+  const rate = total > 0 ? Math.round((t.present / total) * 100) : 0;
   const kpiData = [
-    {val: data.employees.length, label:'Total Employees', color:'#818cf8'},
+    {val: total, label:'Total Employees', color:'#818cf8'},
     {val: t.present,  label:'Present Today',  color:'#4ade80'},
     {val: t.on_leave, label:'On Leave Today',  color:'#f59e0b'},
     {val: t.unmarked, label:'Not Marked Yet',  color:'#64748b'},
+    {val: rate, label:'Attendance Rate', color:'#22d3ee', suffix:'%'},
   ];
-  document.getElementById('kpis').innerHTML = kpiData.map(k=>`
-    <div class="kpi" style="--accent-color:${k.color}">
-      <div class="kpi-val">${k.val}</div>
+  document.getElementById('kpis').innerHTML = kpiData.map((k,i)=>`
+    <div class="kpi fade-in fade-d${i+1}" style="--accent-color:${k.color}">
+      <div class="kpi-val" data-count="${k.val}">${k.val}${k.suffix||''}</div>
       <div class="kpi-label">${k.label}</div>
     </div>`).join('');
 
-  // Today table
+  document.querySelectorAll('.kpi-val[data-count]').forEach(el => {
+    const target = parseInt(el.dataset.count);
+    const suffix = el.textContent.includes('%') ? '%' : '';
+    el.textContent = '0';
+    animateCount(el, target);
+    if(suffix) setTimeout(()=> el.textContent = target + suffix, 650);
+  });
+
   document.getElementById('todayBody').innerHTML = data.employees.map((e,i)=>{
     const att = e.today_status;
     const badgeCls = att==='present'?'b-present':att==='leave'?'b-leave':'b-unmarked';
@@ -547,13 +680,18 @@ async function load(){
     </tr>`;
   }).join('');
 
-  // Monthly cards
-  document.getElementById('teamGrid').innerHTML = data.employees.map((e,i)=>{
+  renderCards(data.employees, year, month, daysInMonth, today);
+  setTimeout(load, 60000);
+}
+
+function renderCards(employees, year, month, daysInMonth, today, filter='') {
+  const filtered = filter ? employees.filter(e => e.name.toLowerCase().includes(filter) || (e.username||'').toLowerCase().includes(filter)) : employees;
+
+  document.getElementById('teamGrid').innerHTML = filtered.map((e,i)=>{
     const {present,leave,unmarked,leaves_remaining} = e.month;
     const leaveUsed = 4 - leaves_remaining;
     const fillPct   = Math.round((leaves_remaining/4)*100);
 
-    // Calendar strip
     const calDays = [];
     for(let d=1;d<=daysInMonth;d++){
       const ds = `${year}-${String(month).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
@@ -562,10 +700,11 @@ async function load(){
       if(dow===0||dow===6){ calDays.push(`<div class="cal-day cd-w">${d}</div>`); continue; }
       const s = e.month.daily[ds];
       const cls = isFuture?'cd-f':s==='present'?'cd-p':s==='leave'?'cd-l':'cd-u';
-      calDays.push(`<div class="cal-day ${cls}" title="${ds}">${d}</div>`);
+      const tip = isFuture?'Upcoming':s==='present'?'Present':s==='leave'?'On Leave':'Not Marked';
+      calDays.push(`<div class="cal-day ${cls}" data-tip="${ds}: ${tip}">${d}</div>`);
     }
 
-    return `<div class="emp-card">
+    return `<div class="emp-card fade-in" style="animation-delay:${i*0.05}s">
       <div class="emp-top">
         <div class="avatar" style="background:${COLORS[i%COLORS.length]}22;color:${COLORS[i%COLORS.length]};font-size:1.1rem">${e.name[0]}</div>
         <div><div class="emp-name">${e.name}</div><div class="emp-handle">@${e.username||'—'}</div></div>
@@ -582,8 +721,19 @@ async function load(){
     </div>`;
   }).join('');
 
-  setTimeout(load, 60000); // auto-refresh every 60s
+  if(filtered.length === 0) {
+    document.getElementById('teamGrid').innerHTML = '<div style="color:var(--muted);padding:24px;text-align:center">No employees match your search.</div>';
+  }
 }
+
+document.getElementById('searchInput').addEventListener('input', function() {
+  if(!allData) return;
+  const today = new Date().toISOString().slice(0,10);
+  const [year,month] = today.split('-').map(Number);
+  const daysInMonth = new Date(year, month, 0).getDate();
+  renderCards(allData.employees, year, month, daysInMonth, today, this.value.toLowerCase().trim());
+});
+
 load();
 </script>
 </body>
