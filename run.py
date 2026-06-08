@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
 run.py — Local dev runner.
-Usage:  BOT_TOKEN=xxx ADMIN_IDS=123456 python run.py
+Usage:  python run.py   (reads .env automatically)
 """
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from bot import app, init_db
 
 init_db()

@@ -27,7 +27,7 @@ This is the secret key that allows your code to control the Telegram bot.
 3. Follow the prompts to give your bot a Display Name (e.g., `AttendBot`) and a unique username (e.g., `MyCompanyAttend_bot`).
 4. BotFather will reply with a long API token that looks like `1234567890:AAH_xyz...`. Save this as your `BOT_TOKEN`.
 
-### B. `ADMIN_IDS` (From Telegram UserInfoBot)
+### B. `ADMIN_IDS` (From FwebTelegram UserInfoBot)
 
 This restricts the Dashboard, Export, and Report buttons so only administrators can see them.
 

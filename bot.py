@@ -6,48 +6,81 @@ Upgraded with a Persistent Reply Keyboard for zero-friction UX.
 Admins get full visibility via the web dashboard.
 """
 
-import os, sqlite3, json
+import os, json, traceback
+import psycopg2
+import psycopg2.extras
 from datetime import date, datetime, timedelta
 from calendar import monthrange
+from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, render_template_string
 import requests
+
+IST = ZoneInfo("Asia/Kolkata")
 
 # ── Configuration ────────────────────────────────────────────────────────────
 BOT_TOKEN   = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 ADMIN_IDS   = set(map(int, os.environ.get("ADMIN_IDS", "0").split(",")))  # Telegram user IDs
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")  # e.g. https://yourapp.onrender.com
+WEBHOOK_URL  = os.environ.get("WEBHOOK_URL", "")  # e.g. https://yourapp.onrender.com
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 LEAVES_PER_MONTH = 4
-DB_PATH     = "attendance.db"
 
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 app = Flask(__name__)
 
 # ── Database ─────────────────────────────────────────────────────────────────
-def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def execute_query(sql, params=(), *, fetch_one=False, fetch_all=False, commit=False):
+    """Run a SQL statement with guaranteed connection cleanup.
+
+    Args:
+        sql:        SQL string with %s placeholders.
+        params:     Tuple of parameters.
+        fetch_one:  Return a single dict row.
+        fetch_all:  Return a list of dict rows.
+        commit:     Commit the transaction (for INSERT/UPDATE).
+
+    Returns:
+        A dict, list of dicts, or None depending on flags.
+    """
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        use_dict = fetch_one or fetch_all
+        cur = conn.cursor(
+            cursor_factory=psycopg2.extras.RealDictCursor
+        ) if use_dict else conn.cursor()
+        cur.execute(sql, params)
+        if fetch_one:
+            result = cur.fetchone()
+        elif fetch_all:
+            result = cur.fetchall()
+        else:
+            result = None
+        if commit:
+            conn.commit()
+        cur.close()
+        return result
+    finally:
+        conn.close()
 
 def init_db():
-    with get_db() as db:
-        db.executescript("""
+    execute_query("""
         CREATE TABLE IF NOT EXISTS employees (
-            telegram_id   INTEGER PRIMARY KEY,
+            telegram_id   BIGINT PRIMARY KEY,
             name          TEXT NOT NULL,
             username      TEXT,
-            registered_at TEXT DEFAULT CURRENT_TIMESTAMP
+            registered_at TIMESTAMP DEFAULT NOW()
         );
-
+    """, commit=True)
+    execute_query("""
         CREATE TABLE IF NOT EXISTS attendance (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER NOT NULL,
-            date        TEXT NOT NULL,          -- YYYY-MM-DD
-            status      TEXT NOT NULL,          -- present | leave
-            marked_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+            id          SERIAL PRIMARY KEY,
+            telegram_id BIGINT NOT NULL,
+            date        DATE NOT NULL,
+            status      TEXT NOT NULL,
+            marked_at   TIMESTAMP DEFAULT NOW(),
             UNIQUE(telegram_id, date)
         );
-        """)
+    """, commit=True)
 
 # ── Telegram helpers ──────────────────────────────────────────────────────────
 def tg(method, **kwargs):
@@ -58,6 +91,20 @@ def send(chat_id, text, **kwargs):
     return tg("sendMessage", chat_id=chat_id, text=text, parse_mode="HTML", **kwargs)
 
 # ── Business logic ────────────────────────────────────────────────────────────
+def now_ist() -> datetime:
+    return datetime.now(IST)
+
+def today_ist() -> date:
+    return now_ist().date()
+
+def time_greeting() -> str:
+    hour = now_ist().hour
+    if hour < 12:
+        return "Good morning"
+    elif hour < 17:
+        return "Good afternoon"
+    return "Good evening"
+
 def is_weekend(d: date) -> bool:
     return d.weekday() >= 5   # Saturday=5, Sunday=6
 
@@ -67,63 +114,71 @@ def working_days_in_month(year: int, month: int):
             if not is_weekend(date(year, month, d))]
 
 def leave_count(telegram_id: int, year: int, month: int) -> int:
-    with get_db() as db:
-        row = db.execute(
-            "SELECT COUNT(*) AS n FROM attendance "
-            "WHERE telegram_id=? AND status='leave' "
-            "AND strftime('%Y-%m', date)=?",
-            (telegram_id, f"{year:04d}-{month:02d}")
-        ).fetchone()
+    row = execute_query(
+        "SELECT COUNT(*) AS n FROM attendance "
+        "WHERE telegram_id=%s AND status='leave' "
+        "AND to_char(date, 'YYYY-MM')=%s",
+        (telegram_id, f"{year:04d}-{month:02d}"),
+        fetch_one=True
+    )
     return row["n"]
 
 def already_marked(telegram_id: int, d: date) -> str | None:
-    with get_db() as db:
-        row = db.execute(
-            "SELECT status FROM attendance WHERE telegram_id=? AND date=?",
-            (telegram_id, d.isoformat())
-        ).fetchone()
+    row = execute_query(
+        "SELECT status FROM attendance WHERE telegram_id=%s AND date=%s",
+        (telegram_id, d.isoformat()),
+        fetch_one=True
+    )
     return row["status"] if row else None
 
 def mark(telegram_id: int, d: date, status: str):
-    with get_db() as db:
-        db.execute(
-            "INSERT OR REPLACE INTO attendance(telegram_id, date, status) VALUES (?,?,?)",
-            (telegram_id, d.isoformat(), status)
-        )
+    execute_query(
+        "INSERT INTO attendance(telegram_id, date, status) VALUES (%s,%s,%s) "
+        "ON CONFLICT (telegram_id, date) DO UPDATE SET status=EXCLUDED.status, marked_at=NOW()",
+        (telegram_id, d.isoformat(), status),
+        commit=True
+    )
 
 def register(telegram_id: int, name: str, username: str):
-    with get_db() as db:
-        db.execute(
-            "INSERT OR REPLACE INTO employees(telegram_id, name, username) VALUES (?,?,?)",
-            (telegram_id, name, username or "")
-        )
+    execute_query(
+        "INSERT INTO employees(telegram_id, name, username) VALUES (%s,%s,%s) "
+        "ON CONFLICT (telegram_id) DO UPDATE SET name=EXCLUDED.name, username=EXCLUDED.username",
+        (telegram_id, name, username or ""),
+        commit=True
+    )
 
 def is_registered(telegram_id: int) -> bool:
-    with get_db() as db:
-        row = db.execute("SELECT 1 FROM employees WHERE telegram_id=?", (telegram_id,)).fetchone()
+    row = execute_query(
+        "SELECT 1 FROM employees WHERE telegram_id=%s",
+        (telegram_id,),
+        fetch_one=True
+    )
     return row is not None
 
 def get_user_name(telegram_id: int) -> str:
-    with get_db() as db:
-        row = db.execute("SELECT name FROM employees WHERE telegram_id=?", (telegram_id,)).fetchone()
+    row = execute_query(
+        "SELECT name FROM employees WHERE telegram_id=%s",
+        (telegram_id,),
+        fetch_one=True
+    )
     return row["name"] if row else "Employee"
 
 def is_admin(telegram_id: int) -> bool:
     return telegram_id in ADMIN_IDS
 
 def get_streak(telegram_id: int) -> int:
-    today = date.today()
+    today = today_ist()
     streak = 0
     d = today
     while True:
         if is_weekend(d):
             d -= timedelta(days=1)
             continue
-        with get_db() as db:
-            row = db.execute(
-                "SELECT status FROM attendance WHERE telegram_id=? AND date=?",
-                (telegram_id, d.isoformat())
-            ).fetchone()
+        row = execute_query(
+            "SELECT status FROM attendance WHERE telegram_id=%s AND date=%s",
+            (telegram_id, d.isoformat()),
+            fetch_one=True
+        )
         if row and row["status"] == "present":
             streak += 1
             d -= timedelta(days=1)
@@ -131,9 +186,35 @@ def get_streak(telegram_id: int) -> int:
             break
     return streak
 
+def attendance_rate(telegram_id: int, year: int, month: int):
+    """Return (user_rate%, team_avg%) for the month so far."""
+    today = today_ist()
+    wdays_past = [d for d in working_days_in_month(year, month) if d <= today]
+    total_wd = len(wdays_past)
+    if total_wd == 0:
+        return 0.0, 0.0
+
+    user_present = execute_query(
+        "SELECT COUNT(*) AS n FROM attendance "
+        "WHERE telegram_id=%s AND status='present' AND to_char(date, 'YYYY-MM')=%s",
+        (telegram_id, f"{year:04d}-{month:02d}"), fetch_one=True
+    )["n"]
+    user_rate = round((user_present / total_wd) * 100, 1)
+
+    employees = execute_query("SELECT COUNT(*) AS n FROM employees", fetch_one=True)["n"]
+    if employees == 0:
+        return user_rate, 0.0
+
+    team_present = execute_query(
+        "SELECT COUNT(*) AS n FROM attendance "
+        "WHERE status='present' AND to_char(date, 'YYYY-MM')=%s",
+        (f"{year:04d}-{month:02d}",), fetch_one=True
+    )["n"]
+    team_rate = round((team_present / (total_wd * employees)) * 100, 1)
+    return user_rate, team_rate
+
 def is_late_mark() -> bool:
-    now = datetime.now()
-    return now.hour >= 11
+    return now_ist().hour >= 11
 
 # ── Message/button builders ───────────────────────────────────────────────────
 def persistent_menu(telegram_id: int):
@@ -149,9 +230,16 @@ def persistent_menu(telegram_id: int):
         "is_persistent": True
     }
 
+MILESTONES = {50, 25, 20, 15, 10, 5}
+
 def streak_text(streak: int) -> str:
     if streak == 0:
         return ""
+    if streak in MILESTONES:
+        return (
+            f"\n\n🎉 <b>MILESTONE — {streak}-day streak!</b>\n"
+            "You're one of the most consistent members. Keep going!"
+        )
     if streak >= 10:
         return f"\n\n🔥 <b>{streak}-day streak!</b> Incredible dedication!"
     if streak >= 5:
@@ -166,20 +254,31 @@ def leave_bar(remaining: int) -> str:
 def handle_start(msg):
     uid = msg["from"]["id"]
     name = get_user_name(uid)
+    greeting = time_greeting()
+
+    admin_help = ""
+    if is_admin(uid):
+        admin_help = (
+            "\n\n<b>Admin Commands:</b>\n"
+            "• /whois <i>name</i> — look up an employee\n"
+            "• /broadcast <i>message</i> — message everyone\n"
+        )
 
     send(uid,
-        f"Hi <b>{name}</b>! Welcome back to <b>AttendBot</b>.\n\n"
+        f"{greeting}, <b>{name}</b>! Welcome back to <b>AttendBot</b>.\n\n"
         "Use the menu below — it only takes <b>one tap</b> to mark attendance!\n\n"
         "• <b>Mark Present</b> — mark yourself present\n"
         "• <b>Take Leave</b> — mark a leave day\n"
-        "• <b>Check Balance</b> — view your monthly stats\n\n"
+        "• <b>Check Balance</b> — view your monthly stats\n"
+        "• /rename <i>New Name</i> — update your display name"
+        + admin_help + "\n\n"
         "Just tap below:",
         reply_markup=persistent_menu(uid)
     )
 
 def handle_direct_mark(msg, status: str):
     uid = msg["from"]["id"]
-    today = date.today()
+    today = today_ist()
     
     if is_weekend(today):
         send(uid, "It's a weekend — no attendance needed.\nEnjoy your break! See you on Monday.",
@@ -240,18 +339,18 @@ def handle_direct_mark(msg, status: str):
 
 def handle_status(msg):
     uid = msg["from"]["id"]
-    today  = date.today()
+    today  = today_ist()
     year, month = today.year, today.month
     wdays  = working_days_in_month(year, month)
 
-    with get_db() as db:
-        rows = db.execute(
-            "SELECT date, status FROM attendance WHERE telegram_id=? "
-            "AND strftime('%Y-%m', date)=? ORDER BY date",
-            (uid, f"{year:04d}-{month:02d}")
-        ).fetchall()
+    rows = execute_query(
+        "SELECT date, status FROM attendance WHERE telegram_id=%s "
+        "AND to_char(date, 'YYYY-MM')=%s ORDER BY date",
+        (uid, f"{year:04d}-{month:02d}"),
+        fetch_all=True
+    )
 
-    marked = {r["date"]: r["status"] for r in rows}
+    marked = {r["date"].isoformat() if hasattr(r["date"], 'isoformat') else r["date"]: r["status"] for r in rows}
     lines  = []
     for d in wdays:
         ds = d.isoformat()
@@ -267,14 +366,97 @@ def handle_status(msg):
     remain  = max(0, LEAVES_PER_MONTH - total_l)
     unmarked_count = len([d for d in wdays if d <= today and d.isoformat() not in marked])
     streak = get_streak(uid)
+    user_rate, team_rate = attendance_rate(uid, year, month)
+
+    rate_comparison = ""
+    if user_rate >= team_rate:
+        rate_comparison = f"  ✅ Above team avg ({team_rate}%)"
+    else:
+        rate_comparison = f"  · Team avg: {team_rate}%"
 
     send(uid,
         f"📊 <b>Your Attendance — {date(year, month, 1).strftime('%B %Y')}</b>\n\n"
         + "\n".join(lines) + "\n\n"
-        f"🟢 <b>Present:</b> {total_p}   🟠 <b>Leave:</b> {total_l}   ⚪ <b>Unmarked:</b> {unmarked_count}\n\n"
+        f"🟢 <b>Present:</b> {total_p}   🟠 <b>Leave:</b> {total_l}   ⚪ <b>Unmarked:</b> {unmarked_count}\n"
+        f"📈 <b>Attendance Rate:</b> {user_rate}%{rate_comparison}\n\n"
         f"{leave_bar(remain)}\n"
         f"Leaves remaining: <b>{remain}</b> / {LEAVES_PER_MONTH}"
         + streak_text(streak),
+        reply_markup=persistent_menu(uid)
+    )
+
+def handle_whois(msg):
+    uid = msg["from"]["id"]
+    if not is_admin(uid):
+        send(uid, "Admin only.", reply_markup=persistent_menu(uid)); return
+
+    text = msg.get("text", "").strip()
+    query = text.split(" ", 1)[1].strip() if " " in text else ""
+    if not query:
+        send(uid, "Usage: /whois <i>name or username</i>", reply_markup=persistent_menu(uid)); return
+
+    results = execute_query(
+        "SELECT telegram_id, name, username FROM employees "
+        "WHERE LOWER(name) LIKE %s OR LOWER(username) LIKE %s "
+        "ORDER BY name LIMIT 5",
+        (f"%{query.lower()}%", f"%{query.lower()}%"),
+        fetch_all=True
+    )
+    if not results:
+        send(uid, f"No employees matching '<b>{query}</b>'.", reply_markup=persistent_menu(uid)); return
+
+    today = today_ist()
+    lines = [f"🔍 <b>Results for '{query}'</b>\n"]
+    for emp in results:
+        streak = get_streak(emp["telegram_id"])
+        today_s = already_marked(emp["telegram_id"], today)
+        status_icon = {"present": "🟢", "leave": "🟠"}.get(today_s, "⚪")
+        handle = f"@{emp['username']}" if emp["username"] else "—"
+        streak_info = f"  🔥{streak}" if streak > 0 else ""
+        lines.append(
+            f"<b>{emp['name']}</b> ({handle})\n"
+            f"   Today: {status_icon}{streak_info}   ID: <code>{emp['telegram_id']}</code>"
+        )
+    send(uid, "\n".join(lines), reply_markup=persistent_menu(uid))
+
+def handle_broadcast(msg):
+    uid = msg["from"]["id"]
+    if not is_admin(uid):
+        send(uid, "Admin only.", reply_markup=persistent_menu(uid)); return
+
+    text = msg.get("text", "").strip()
+    message = text.split(" ", 1)[1].strip() if " " in text else ""
+    if not message:
+        send(uid, "Usage: /broadcast <i>your message here</i>", reply_markup=persistent_menu(uid)); return
+
+    employees = execute_query("SELECT telegram_id FROM employees", fetch_all=True)
+    sent = 0
+    for emp in employees:
+        try:
+            send(emp["telegram_id"],
+                f"📢 <b>Announcement from Admin</b>\n\n{message}",
+                reply_markup=persistent_menu(emp["telegram_id"])
+            )
+            sent += 1
+        except Exception:
+            pass
+    send(uid, f"✅ Broadcast sent to <b>{sent}</b> / {len(employees)} employees.",
+         reply_markup=persistent_menu(uid))
+
+def handle_rename(msg):
+    uid = msg["from"]["id"]
+    text = msg.get("text", "").strip()
+    new_name = text.split(" ", 1)[1].strip() if " " in text else ""
+    if not new_name or len(new_name) < 2:
+        send(uid, "Usage: /rename <i>Your New Name</i>\n\nName must be at least 2 characters.",
+             reply_markup=persistent_menu(uid)); return
+
+    old_name = get_user_name(uid)
+    uname = msg["from"].get("username", "")
+    register(uid, new_name, uname)
+    send(uid,
+        f"✅ Name updated!\n\n"
+        f"<s>{old_name}</s> → <b>{new_name}</b>",
         reply_markup=persistent_menu(uid)
     )
 
@@ -283,25 +465,24 @@ def handle_report(msg):
     if not is_admin(uid):
         send(uid, "Admin only.", reply_markup=persistent_menu(uid)); return
 
-    today = date.today()
+    today = today_ist()
     year, month = today.year, today.month
     wdays_past = [d for d in working_days_in_month(year, month) if d <= today]
 
-    with get_db() as db:
-        employees = db.execute("SELECT * FROM employees ORDER BY name").fetchall()
+    employees = execute_query("SELECT * FROM employees ORDER BY name", fetch_all=True)
 
     if not employees:
         send(uid, "No employees registered yet.", reply_markup=persistent_menu(uid)); return
 
     lines = [f"<b>Team Report — {date(year,month,1).strftime('%B %Y')}</b> ({today.strftime('%d %b')})\n"]
     for emp in employees:
-        with get_db() as db:
-            rows = db.execute(
-                "SELECT date, status FROM attendance WHERE telegram_id=? "
-                "AND strftime('%Y-%m', date)=?",
-                (emp["telegram_id"], f"{year:04d}-{month:02d}")
-            ).fetchall()
-        marked   = {r["date"]: r["status"] for r in rows}
+        rows = execute_query(
+            "SELECT date, status FROM attendance WHERE telegram_id=%s "
+            "AND to_char(date, 'YYYY-MM')=%s",
+            (emp["telegram_id"], f"{year:04d}-{month:02d}"),
+            fetch_all=True
+        )
+        marked   = {(r["date"].isoformat() if hasattr(r["date"], 'isoformat') else r["date"]): r["status"] for r in rows}
         present  = sum(1 for v in marked.values() if v == "present")
         on_leave = sum(1 for v in marked.values() if v == "leave")
         unmarked = len([d for d in wdays_past if d.isoformat() not in marked])
@@ -311,15 +492,14 @@ def handle_report(msg):
             f"   🟢 {present} P   🟠 {on_leave} L   ⚪ {unmarked} U   🍃 {remain} left"
         )
 
-    with get_db() as db:
-        today_present = db.execute(
-            "SELECT COUNT(*) AS n FROM attendance WHERE date=? AND status='present'",
-            (today.isoformat(),)
-        ).fetchone()["n"]
-        today_leave = db.execute(
-            "SELECT COUNT(*) AS n FROM attendance WHERE date=? AND status='leave'",
-            (today.isoformat(),)
-        ).fetchone()["n"]
+    today_present = execute_query(
+        "SELECT COUNT(*) AS n FROM attendance WHERE date=%s AND status='present'",
+        (today.isoformat(),), fetch_one=True
+    )["n"]
+    today_leave = execute_query(
+        "SELECT COUNT(*) AS n FROM attendance WHERE date=%s AND status='leave'",
+        (today.isoformat(),), fetch_one=True
+    )["n"]
 
     lines.append(f"\n<b>Today:</b> {today_present} present · {today_leave} on leave · {len(employees)-today_present-today_leave} not yet marked\n")
     lines.append(f"🌐 <b>Dashboard:</b> {WEBHOOK_URL}/dashboard")
@@ -331,21 +511,22 @@ def handle_export(msg):
     if not is_admin(uid):
         send(uid, "Admin only.", reply_markup=persistent_menu(uid)); return
 
-    today = date.today()
+    today = today_ist()
     year, month = today.year, today.month
     wdays = working_days_in_month(year, month)
 
-    with get_db() as db:
-        employees = db.execute("SELECT * FROM employees ORDER BY name").fetchall()
-        all_att   = db.execute(
-            "SELECT telegram_id, date, status FROM attendance "
-            "WHERE strftime('%Y-%m', date)=?",
-            (f"{year:04d}-{month:02d}",)
-        ).fetchall()
+    employees = execute_query("SELECT * FROM employees ORDER BY name", fetch_all=True)
+    all_att = execute_query(
+        "SELECT telegram_id, date, status FROM attendance "
+        "WHERE to_char(date, 'YYYY-MM')=%s",
+        (f"{year:04d}-{month:02d}",),
+        fetch_all=True
+    )
 
     att_map = {}
     for r in all_att:
-        att_map[(r["telegram_id"], r["date"])] = r["status"]
+        d_key = r["date"].isoformat() if hasattr(r["date"], 'isoformat') else r["date"]
+        att_map[(r["telegram_id"], d_key)] = r["status"]
 
     csv_lines = ["Name,Username," + ",".join(d.strftime("%d-%b") for d in wdays) + ",Present,Leave,Unmarked,Leaves Remaining"]
     for emp in employees:
@@ -381,6 +562,35 @@ def handle_export(msg):
 
     os.remove(fname)
 
+# ── Known patterns (used for routing + registration guard) ──────────────────
+BUTTON_LABELS = {
+    "✅ Mark Present", "Mark Present",
+    "🏖️ Take Leave", "Take Leave",
+    "📊 Check Balance", "Check Balance",
+    "📋 Admin Report", "Admin Report",
+    "📥 Export CSV", "Export CSV",
+}
+
+GREETINGS = {"hi", "hello", "hey", "hii", "hiii", "hola", "yo", "sup",
+             "good morning", "good afternoon", "good evening", "gm", "namaste"}
+THANKS = {"thanks", "thank you", "thankyou", "thx", "ty", "thank u"}
+
+def sync_username(msg):
+    """Silently update the stored username if it has changed."""
+    uid = msg["from"]["id"]
+    current_uname = msg["from"].get("username", "")
+    if not current_uname:
+        return
+    stored = execute_query(
+        "SELECT username FROM employees WHERE telegram_id=%s",
+        (uid,), fetch_one=True
+    )
+    if stored and stored["username"] != current_uname:
+        execute_query(
+            "UPDATE employees SET username=%s WHERE telegram_id=%s",
+            (current_uname, uid), commit=True
+        )
+
 # ── Webhook endpoint ──────────────────────────────────────────────────────────
 @app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
 def webhook():
@@ -394,11 +604,16 @@ def webhook():
             if not is_registered(uid):
                 if text == "/start":
                     send(uid, "👋 Welcome to <b>AttendBot</b>!\n\nBefore we begin, please type your <b>Full Legal Name</b> as it should appear on official records:")
+                elif text in BUTTON_LABELS or text.startswith("/"):
+                    send(uid, "⚠️ <b>Not registered yet!</b>\n\nPlease type /start first to set up your profile.")
                 else:
                     uname = msg["from"].get("username", "")
                     register(uid, text, uname)
                     send(uid, f"✅ Thank you, <b>{text}</b>! Your profile is set up.\n\nPlease use the menu below to update your status.", reply_markup=persistent_menu(uid))
                 return jsonify(ok=True)
+
+            # Auto-sync username on every interaction
+            sync_username(msg)
 
             if text in ["/start", "/help"]:
                 handle_start(msg)
@@ -412,11 +627,46 @@ def webhook():
                 handle_report(msg)
             elif text in ["📥 Export CSV", "Export CSV", "/export"]:
                 handle_export(msg)
+            elif text.startswith("/whois"):
+                handle_whois(msg)
+            elif text.startswith("/broadcast"):
+                handle_broadcast(msg)
+            elif text.startswith("/rename"):
+                handle_rename(msg)
+            elif text.lower() in GREETINGS:
+                name = get_user_name(uid)
+                greeting = time_greeting()
+                today = today_ist()
+                status = already_marked(uid, today)
+                if is_weekend(today):
+                    nudge = "It's the weekend — enjoy your break! 🌴"
+                elif status == "present":
+                    nudge = "You're already marked present today. ✅"
+                elif status == "leave":
+                    nudge = "You're on leave today. Rest well! 🏖️"
+                else:
+                    nudge = "Don't forget to mark your attendance — tap a button below!"
+                send(uid,
+                    f"{greeting}, <b>{name}</b>! 👋\n\n{nudge}",
+                    reply_markup=persistent_menu(uid)
+                )
+            elif text.lower() in THANKS:
+                name = get_user_name(uid)
+                send(uid,
+                    f"You're welcome, <b>{name}</b>! Happy to help. 😊\n\n"
+                    "Tap a button below if you need anything else.",
+                    reply_markup=persistent_menu(uid)
+                )
             else:
-                handle_start(msg)
+                name = get_user_name(uid)
+                send(uid,
+                    f"Sorry <b>{name}</b>, I didn't understand that.\n\n"
+                    "Use the <b>buttons below</b> or try /help for a list of commands.",
+                    reply_markup=persistent_menu(uid)
+                )
 
     except Exception as e:
-        print(f"Error: {e}")
+        traceback.print_exc()
     return jsonify(ok=True)
 
 # ── Admin web dashboard ───────────────────────────────────────────────────────
@@ -740,21 +990,23 @@ def dashboard():
 
 @app.route("/api/dashboard")
 def api_dashboard():
-    today = date.today()
+    today = today_ist()
     year, month = today.year, today.month
     wdays_past = [d for d in working_days_in_month(year, month) if d <= today]
 
-    with get_db() as db:
-        employees = db.execute("SELECT * FROM employees ORDER BY name").fetchall()
-        month_str = f"{year:04d}-{month:02d}"
-        all_att   = db.execute(
-            "SELECT telegram_id, date, status, marked_at FROM attendance "
-            "WHERE strftime('%Y-%m', date)=?", (month_str,)
-        ).fetchall()
+    employees = execute_query("SELECT * FROM employees ORDER BY name", fetch_all=True)
+    month_str = f"{year:04d}-{month:02d}"
+    all_att = execute_query(
+        "SELECT telegram_id, date, status, marked_at FROM attendance "
+        "WHERE to_char(date, 'YYYY-MM')=%s", (month_str,),
+        fetch_all=True
+    )
 
     att_map = {}
     for r in all_att:
-        att_map[(r["telegram_id"], r["date"])] = {"status": r["status"], "marked_at": r["marked_at"]}
+        d_key = r["date"].isoformat() if hasattr(r["date"], 'isoformat') else r["date"]
+        ma = r["marked_at"].isoformat() if hasattr(r.get("marked_at"), 'isoformat') else r["marked_at"]
+        att_map[(r["telegram_id"], d_key)] = {"status": r["status"], "marked_at": ma}
 
     emp_data = []
     today_present = today_leave = today_unmarked = 0
@@ -807,12 +1059,81 @@ def index():
 
 @app.route("/setup")
 def setup():
-    if WEBHOOK_URL:
-        r = requests.post(f"{TG_API}/setWebhook",
-                          json={"url": f"{WEBHOOK_URL}/webhook/{BOT_TOKEN}"})
-        return jsonify(r.json())
-    return jsonify({"error": "WEBHOOK_URL not set"})
+    if not WEBHOOK_URL:
+        return jsonify({"error": "WEBHOOK_URL not set"})
 
+    results = {}
+
+    # 1. Set webhook
+    r = requests.post(f"{TG_API}/setWebhook",
+                      json={"url": f"{WEBHOOK_URL}/webhook/{BOT_TOKEN}"})
+    results["webhook"] = r.json()
+
+    # 2. Register command menu (the "/" button in chat)
+    commands = [
+        {"command": "start",     "description": "Show welcome message & help"},
+        {"command": "status",    "description": "View your monthly attendance"},
+        {"command": "leaves",    "description": "Check remaining leave balance"},
+        {"command": "rename",    "description": "Change your display name"},
+        {"command": "report",    "description": "[Admin] Team attendance report"},
+        {"command": "export",    "description": "[Admin] Export CSV spreadsheet"},
+        {"command": "whois",     "description": "[Admin] Look up an employee"},
+        {"command": "broadcast", "description": "[Admin] Message all employees"},
+        {"command": "help",      "description": "Show available commands"},
+    ]
+    r = requests.post(f"{TG_API}/setMyCommands", json={"commands": commands})
+    results["commands"] = r.json()
+
+    # 3. Set bot description (shown before user taps Start)
+    description = (
+        "\ud83d\udccb AttendBot \u2014 One-tap daily attendance.\n\n"
+        "Mark present or leave with a single tap. "
+        "Track your streaks, leave balance, and monthly stats. "
+        "Admins get a live dashboard, CSV exports, and team reports."
+    )
+    r = requests.post(f"{TG_API}/setMyDescription", json={"description": description})
+    results["description"] = r.json()
+
+    # 4. Set short description (shown in chat list / sharing)
+    r = requests.post(f"{TG_API}/setMyShortDescription",
+                      json={"short_description": "One-tap attendance tracking for teams"})
+    results["short_description"] = r.json()
+
+    return jsonify(results)
+
+# ── Daily Reminder Endpoint ──────────────────────────────────────────────────
+@app.route("/cron/remind")
+def cron_remind():
+    today = today_ist()
+    if is_weekend(today):
+        return jsonify({"skipped": "weekend"})
+
+    employees = execute_query("SELECT telegram_id, name FROM employees", fetch_all=True)
+    marked_today_rows = execute_query(
+        "SELECT telegram_id FROM attendance WHERE date=%s",
+        (today.isoformat(),), fetch_all=True
+    )
+
+    if not employees:
+        return jsonify({"reminded": 0, "total": 0})
+
+    marked_today = {r["telegram_id"] for r in marked_today_rows} if marked_today_rows else set()
+    greeting = time_greeting()
+
+    reminded = 0
+    for emp in employees:
+        if emp["telegram_id"] not in marked_today:
+            send(emp["telegram_id"],
+                f"{greeting}, <b>{emp['name']}</b>!\n\n"
+                f"<b>{today.strftime('%A, %d %B %Y')}</b>\n\n"
+                "Don't forget to mark your attendance — just tap a button below:",
+                reply_markup=persistent_menu(emp["telegram_id"])
+            )
+            reminded += 1
+
+    return jsonify({"reminded": reminded, "total": len(employees), "already_marked": len(marked_today)})
+
+# ── Demo Seeding ─────────────────────────────────────────────────────────────
 @app.route("/demo/seed")
 def seed_demo():
     import random
@@ -828,20 +1149,19 @@ def seed_demo():
         (1009, "Siddharth V",   "sidv"),
         (1010, "Divya George",  "divyag"),
     ]
-    today = date.today()
+    today = today_ist()
     year, month = today.year, today.month
     wdays = [d for d in working_days_in_month(year, month) if d <= today]
 
-    with get_db() as db:
-        for tid, name, uname in demo_employees:
-            db.execute("INSERT OR IGNORE INTO employees(telegram_id,name,username) VALUES(?,?,?)",
-                       (tid, name, uname))
-        for d in wdays:
-            for tid, _, _ in demo_employees:
-                if random.random() < 0.05: continue 
-                status = "leave" if random.random() < 0.12 else "present"
-                db.execute("INSERT OR REPLACE INTO attendance(telegram_id,date,status) VALUES(?,?,?)",
-                           (tid, d.isoformat(), status))
+    # Use our built-in helper functions (which auto-commit to PostgreSQL!)
+    for tid, name, uname in demo_employees:
+        register(tid, name, uname)
+        
+    for d in wdays:
+        for tid, _, _ in demo_employees:
+            if random.random() < 0.05: continue  # ~5% chance of not marking
+            status = "leave" if random.random() < 0.12 else "present"
+            mark(tid, d, status)
 
     return jsonify({"seeded": len(demo_employees), "days": len(wdays)})
 
