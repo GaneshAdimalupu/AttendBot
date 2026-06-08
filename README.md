@@ -1,125 +1,171 @@
 # AttendBot — Frictionless Attendance & Leave System
 
-AttendBot is a Telegram bot + Flask web dashboard that replaces messy WhatsApp group polls. It provides employees with a frictionless, two-tap "Persistent Keyboard" to mark their daily attendance, while giving administrators a real-time, auto-refreshing web dashboard to track team presence.
+A Telegram bot + live web dashboard that replaces messy WhatsApp group polls. Employees mark daily attendance with a single tap. Admins get real-time dashboards, CSV exports, team reports, and broadcast messaging — all inside Telegram.
+
+---
 
 ## Features
 
-* **Zero-Friction UX:** Persistent menu buttons mean employees never have to type a command.
-* **Name Registration:** First-time users are prompted to enter their full legal name, so records always reflect real names — not Telegram display names.
-* **Auto-Calculating Leaves:** Enforces a limit of 4 leaves/month and tracks remaining balances.
-* **Weekend Awareness:** Automatically excludes Saturdays and Sundays from attendance and the dashboard.
-* **Live Admin Dashboard:** Real-time KPIs, today's headcount, and a monthly visual calendar per employee.
-* **CSV Export:** Admins can pull a full matrix report for payroll directly within Telegram.
-* **Streak Tracking:** Consecutive present-day streaks are calculated and shown to encourage consistency.
+| Category | Feature |
+|---|---|
+| **Employee UX** | Persistent reply keyboard — no commands needed, just tap |
+| **Registration** | First-time users type their full name; button labels are never saved as names |
+| **Attendance** | Mark Present or Take Leave once per day; switch status anytime |
+| **Leave Tracking** | 4 leaves/month enforced; balance shown as a visual bar |
+| **Streaks** | Consecutive present-day streaks with milestone celebrations at 5/10/15/20/25/50 days |
+| **Attendance Rate** | Personal % vs. team average shown in Check Balance |
+| **Weekend Awareness** | Saturdays & Sundays automatically excluded from all calculations |
+| **Smart Greetings** | IST-aware "Good morning / afternoon / evening" responses |
+| **Casual Replies** | Responds naturally to hi, hello, thanks, etc. |
+| **Admin Report** | Instant team summary with per-employee P/L/U breakdown |
+| **Export CSV** | Month-picker inline keyboard (current + 3 prior months); or `/export May 2025` |
+| **Historical Reports** | `/report May 2025`, `/report last`, `/report 2025-05` |
+| **Admin Lookup** | `/whois <name>` — fuzzy search with today's status and streak |
+| **Broadcast** | `/broadcast <message>` — send announcements to all employees |
+| **Self-service Rename** | `/rename New Name` — users update their own display name |
+| **Username Sync** | Telegram @username updated silently on every interaction |
+| **Live Dashboard** | Auto-refreshing web UI with KPIs, today's headcount, monthly calendar heatmap |
+| **Timezone** | All operations pinned to IST (`Asia/Kolkata`) |
+| **Database** | PostgreSQL with connection-per-query wrapper (no idle connections) |
 
 ---
 
-## 1. Required API Keys & Environment Variables
+## Quick Start for Evaluators
 
-Before running the bot, you need to gather these three environment variables:
+> You can test **all** features including admin ones without any setup.
 
-### A. `BOT_TOKEN` (From Telegram BotFather)
+1. Start the bot → `/start` → type your name when prompted
+2. Unlock admin access:
+   ```
+   /admin attendbot123
+   ```
+3. You now have full admin access — try **📋 Admin Report**, **📥 Export CSV**, `/whois`, `/broadcast`
 
-This is the secret key that allows your code to control the Telegram bot.
-
-1. Open Telegram and search for **@BotFather** (look for the verified blue checkmark).
-2. Send the command `/newbot`.
-3. Follow the prompts to give your bot a Display Name (e.g., `AttendBot`) and a unique username (e.g., `MyCompanyAttend_bot`).
-4. BotFather will reply with a long API token that looks like `1234567890:AAH_xyz...`. Save this as your `BOT_TOKEN`.
-
-### B. `ADMIN_IDS` (From FwebTelegram UserInfoBot)
-
-This restricts the Dashboard, Export, and Report buttons so only administrators can see them.
-
-1. Open Telegram and search for **@userinfobot**.
-2. Send any message to it.
-3. It will reply with your numeric `Id` (e.g., `123456789`).
-4. Save this as your `ADMIN_IDS`. *(If you have multiple admins, separate their IDs with a comma: `123456,987654`).*
-
-### C. `WEBHOOK_URL`
-
-This tells Telegram exactly where to send user messages over the internet.
-
-* **For Local Testing:** You will use an `ngrok` URL (see Local Development below).
-* **For Production:** You will use your live Render URL (e.g., `https://my-attendbot.onrender.com`).
+> The default password is `attendbot123`. It can be changed via the `ADMIN_PASSWORD` environment variable.
 
 ---
 
-## 2. Local Development Setup
+## Environment Variables
 
-Because this bot uses **Webhooks**, Telegram needs a public URL to talk to your local computer. We use a free tool called [ngrok](https://ngrok.com/) to create a temporary tunnel.
+| Variable | Required | Description |
+|---|---|---|
+| `BOT_TOKEN` | ✅ | From [@BotFather](https://t.me/botfather) |
+| `DATABASE_URL` | ✅ | PostgreSQL connection string (e.g. from [Neon](https://neon.tech) or Render) |
+| `WEBHOOK_URL` | ✅ | Your public server URL, no trailing slash |
+| `ADMIN_IDS` | Optional | Comma-separated Telegram user IDs for permanent admins |
+| `ADMIN_PASSWORD` | Optional | Password for `/admin` self-promotion (default: `attendbot123`) |
+| `PORT` | Optional | Server port (default: `5000`) |
 
-1. **Clone the repository & install dependencies:**
+---
+
+## Bot Commands
+
+### Everyone
+| Command | Description |
+|---|---|
+| `/start` or `/help` | Welcome message and command list |
+| `/status` or `/leaves` | Your monthly attendance calendar + rate vs. team avg |
+| `/rename New Name` | Update your display name |
+| `/admin <password>` | Unlock admin features for this session |
+
+### Keyboard Buttons
+| Button | Action |
+|---|---|
+| ✅ Mark Present | Mark yourself present today |
+| 🏖️ Take Leave | Mark a leave day (enforces monthly limit) |
+| 📊 Check Balance | Full monthly stats with attendance rate |
+
+### Admin Only
+| Command | Description |
+|---|---|
+| 📋 Admin Report | Team summary (works with month arg: `Admin Report May 2025`) |
+| 📥 Export CSV | Shows month picker (current + 3 prior); or `/export May 2025` |
+| `/report [month]` | Team report — supports `last`, `May`, `May 2025`, `2025-05` |
+| `/export [month]` | CSV export — same month formats as `/report` |
+| `/whois <name>` | Look up employee by name/username fragment |
+| `/broadcast <msg>` | Send an announcement to all registered employees |
+
+---
+
+## Local Development
+
+### Prerequisites
+- Python 3.9+
+- A PostgreSQL database (free options: [Neon.tech](https://neon.tech), [Supabase](https://supabase.com))
+- [ngrok](https://ngrok.com/) for a public tunnel
+
+### Setup
+
+1. **Clone and install:**
    ```bash
-   git clone https://github.com/YourUsername/AttendBot.git
-   cd AttendBot
+   git clone https://github.com/GaneshAdimalupu/AttendBot.git
+   cd AttendBot/attendance_system
    pip install -r requirements.txt
    ```
 
-2. **Start the ngrok tunnel:**
-   *(Assuming you have downloaded and installed ngrok)*
+2. **Create `.env`:**
+   ```env
+   BOT_TOKEN=your_telegram_bot_token
+   DATABASE_URL=postgresql://user:password@host/dbname
+   ADMIN_IDS=your_telegram_user_id
+   WEBHOOK_URL=https://xxxx.ngrok-free.app
+   ADMIN_PASSWORD=attendbot123
+   ```
+
+3. **Start ngrok:**
    ```bash
    ngrok http 5000
    ```
-   Copy the `Forwarding` URL it gives you (e.g., `https://a1b2c3d4.ngrok-free.app`).
+   Copy the `https://...ngrok-free.app` URL into `WEBHOOK_URL` in `.env`.
 
-3. **Set your Environment Variables (Create a `.env` file):**
-   Create a file named `.env` in the root folder and add your keys:
-   ```env
-   BOT_TOKEN=your_telegram_bot_token
-   ADMIN_IDS=your_numeric_admin_id
-   WEBHOOK_URL=https://a1b2c3d4.ngrok-free.app
-   ```
-
-4. **Run the local server:**
+4. **Run the server:**
    ```bash
    python run.py
    ```
 
-5. **Register the Webhook & Test:**
-   * Open your browser and go to: `http://localhost:5000/setup` (You should see `{"description": "Webhook was set"}`).
-   * Open Telegram, message your bot `/start`, and test the buttons!
-   * View your local admin dashboard at `http://localhost:5000/dashboard`.
+5. **Register webhook + commands:**
+   Visit `http://localhost:5000/setup` in your browser.
+   This sets the webhook, registers the `/` command menu, and sets the bot description in one call.
+
+6. **Seed demo data (optional):**
+   Visit `http://localhost:5000/demo/seed` to populate 10 fake employees with realistic attendance history.
+
+7. **View dashboard:**
+   Open `http://localhost:5000/dashboard`
 
 ---
 
-## 3. Deploying to Render (Free Production Server)
+## Deploying to Render
 
-To keep your bot running 24/7 without your computer, deploy it to Render.com.
+1. Push your code to GitHub. Make sure `.env` is in `.gitignore`.
 
-1. **Push your code to GitHub.** Ensure `attendance.db` and `.env` are in your `.gitignore` file.
-2. Go to [Render.com](https://render.com) and create a new **Web Service**.
-3. Connect your GitHub repository.
-4. **Configure the Service:**
-   * **Runtime:** Python 3
-   * **Build Command:** `pip install -r requirements.txt`
-   * **Start Command:** `gunicorn bot:app --bind 0.0.0.0:$PORT --workers 1`
+2. Go to [Render.com](https://render.com) → **New Web Service** → connect your repo.
 
-5. **Set Environment Variables:** Scroll down to the Environment Variables section and add:
-   * `BOT_TOKEN`: (Your BotFather Token)
-   * `ADMIN_IDS`: (Your Telegram ID)
-   * `WEBHOOK_URL`: `https://your-render-app-name.onrender.com` *(Make sure there is no trailing slash `/` at the end)*
-   * `TZ`: `Asia/Kolkata` *(Crucial: This ensures the server calculates "midnight" correctly for attendance limits).*
+3. Configure:
+   | Setting | Value |
+   |---|---|
+   | Runtime | Python 3 |
+   | Build Command | `pip install -r requirements.txt` |
+   | Start Command | `gunicorn bot:app --bind 0.0.0.0:$PORT --workers 1` |
 
-6. Click **Create Web Service** and wait for the deployment to finish.
-7. **Final Step (Register Production Webhook):** Once the server says "Live", open your browser and visit `https://your-render-app-name.onrender.com/setup` to link Telegram to your new cloud server.
+4. Add Environment Variables:
+   - `BOT_TOKEN`
+   - `DATABASE_URL` ← use the **external** connection string from your DB provider
+   - `WEBHOOK_URL` ← your Render URL, e.g. `https://attendbot.onrender.com`
+   - `ADMIN_IDS`
+   - `ADMIN_PASSWORD`
 
----
+5. Deploy → once live, visit `https://your-app.onrender.com/setup` to register the webhook.
 
-## 4. How to Use
+### Daily Reminders (Optional Cron Job)
 
-**For Employees:**
-Simply share the bot's `@username` with your team.
-When they press `Start`, they will be prompted to type their **full legal name**. After that, a permanent menu will appear at the bottom of their chat. They only need to tap **✅ Mark Present** or **🏖️ Take Leave** once per day.
+Set up an external cron service (e.g. [cron-job.org](https://cron-job.org)) to hit this URL on weekday mornings:
 
-**For Admins:**
-Because your Telegram ID is in the `ADMIN_IDS` variable, your menu will automatically feature two extra buttons:
+```
+GET https://your-app.onrender.com/cron/remind
+```
 
-* **📋 Admin Report:** Sends a quick text summary of the whole team to your chat.
-* **📥 Export CSV:** Instantly generates and downloads a spreadsheet of the month's attendance.
-* **Live Dashboard:** Visit your `/dashboard` URL in any web browser for the full visual experience.
-
-*(Note: To easily test the dashboard visuals, you can instantly populate the database with fake employees by visiting `/demo/seed` in your browser).*
+Employees who haven't marked attendance yet get a smart reminder (morning/afternoon/evening greeting based on IST time). Weekends are automatically skipped.
 
 ---
 
@@ -127,18 +173,49 @@ Because your Telegram ID is in the `ADMIN_IDS` variable, your menu will automati
 
 ```
 attendance_system/
-├── bot.py             # Main application (bot logic + dashboard HTML)
-├── run.py             # Local dev runner with debug mode
-├── requirements.txt   # Python dependencies (Flask, requests)
-├── .env               # Environment variables (not committed)
-├── .gitignore         # Excludes .env, attendance.db, __pycache__
-└── attendance.db      # SQLite database (auto-created at runtime)
+├── bot.py            # All bot logic, handlers, dashboard HTML, API routes
+├── run.py            # Local dev entry point (loads .env automatically)
+├── requirements.txt  # Python dependencies
+├── Procfile          # Render/Heroku process definition
+├── .env              # Local secrets (never committed)
+└── .gitignore        # Excludes .env, __pycache__, etc.
 ```
+
+---
 
 ## Tech Stack
 
-* **Backend:** Python 3, Flask
-* **Bot API:** Telegram Bot API (webhooks)
-* **Database:** SQLite
-* **Dashboard:** Vanilla HTML/CSS/JS (embedded in bot.py)
-* **Hosting:** Render.com (free tier)
+| Layer | Technology |
+|---|---|
+| Language | Python 3.9+ |
+| Web Framework | Flask |
+| Bot API | Telegram Bot API (webhooks) |
+| Database | PostgreSQL via `psycopg2` |
+| Dashboard | Vanilla HTML/CSS/JS (embedded in `bot.py`) |
+| Hosting | Render.com |
+| Timezone | `zoneinfo` (stdlib) — Asia/Kolkata |
+| Local Dev | `python-dotenv` |
+
+---
+
+## Database Schema
+
+```sql
+CREATE TABLE employees (
+    telegram_id   BIGINT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    username      TEXT,
+    registered_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE attendance (
+    id          SERIAL PRIMARY KEY,
+    telegram_id BIGINT NOT NULL,
+    date        DATE NOT NULL,
+    status      TEXT NOT NULL,        -- 'present' | 'leave'
+    marked_at   TIMESTAMP DEFAULT NOW(),
+    UNIQUE(telegram_id, date)
+);
+```
+
+Tables are created automatically on first run via `init_db()`.
