@@ -980,6 +980,12 @@ h2 { font-size:.85rem; font-weight:600; text-transform:uppercase; letter-spacing
 .refresh a { color:var(--accent); text-decoration:none; }
 .refresh a:hover { text-decoration:underline; }
 
+.bot-link { display:inline-flex; align-items:center; gap:6px; padding:6px 16px;
+  border-radius:20px; background:rgba(36,161,222,.15); color:#24a1de;
+  font-size:.8rem; font-weight:600; text-decoration:none; transition:all .2s; }
+.bot-link:hover { background:rgba(36,161,222,.25); transform:translateY(-1px); }
+.bot-link svg { width:16px; height:16px; fill:currentColor; }
+
 @media(max-width:600px){ main{padding:16px 12px} .kpi-val{font-size:1.8rem} .header-right{flex-wrap:wrap} }
 </style>
 </head>
@@ -993,6 +999,10 @@ h2 { font-size:.85rem; font-weight:600; text-transform:uppercase; letter-spacing
     </div>
   </div>
   <div class="header-right">
+    <a class="bot-link" href="https://t.me/tetris_tkhub_bot" target="_blank">
+      <svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm5.56 8.16l-1.97 9.32c-.15.67-.55.83-1.11.52l-3.07-2.26-1.48 1.43c-.16.16-.3.3-.62.3l.22-3.14 5.7-5.15c.25-.22-.05-.34-.39-.13l-7.04 4.44-3.03-.95c-.66-.2-.67-.66.14-.98l11.84-4.56c.55-.2 1.03.13.85.98z"/></svg>
+      Open Bot
+    </a>
     <span class="month-badge" id="monthBadge"></span>
     <span class="refresh"><span class="live-dot"></span> Live · <a href="javascript:location.reload()">Refresh</a></span>
   </div>
