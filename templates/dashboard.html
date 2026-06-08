@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AttendBot — Admin Dashboard</title>
+<meta name="description" content="AttendBot admin dashboard for managing team attendance, holidays, and employee records.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Sora:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+
+<!-- Mobile overlay -->
+<div class="mobile-overlay" onclick="toggleMobileSidebar()"></div>
+
+<!-- ── Sidebar ──────────────────────────────────────────────────── -->
+<aside class="sidebar" id="sidebar">
+  <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">◀</button>
+
+  <div class="sidebar-header">
+    <div class="sidebar-logo">📋</div>
+    <div class="sidebar-brand">
+      <h1>AttendBot</h1>
+      <div class="sub">Admin Dashboard</div>
+    </div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <a class="nav-item active" data-panel="overview" onclick="switchPanel('overview')">
+      <svg viewBox="0 0 24 24"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+      <span class="nav-label">Overview</span>
+    </a>
+    <a class="nav-item" data-panel="employees" onclick="switchPanel('employees')">
+      <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+      <span class="nav-label">Employees</span>
+    </a>
+    <a class="nav-item" data-panel="holidays" onclick="switchPanel('holidays')">
+      <svg viewBox="0 0 24 24"><path d="M19 3h-1V1h-2v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V8h14v11zM9 10H7v2h2v-2zm4 0h-2v2h2v-2zm4 0h-2v2h2v-2z"/></svg>
+      <span class="nav-label">Holidays</span>
+    </a>
+    <a class="nav-item" data-panel="instructions" onclick="switchPanel('instructions')">
+      <svg viewBox="0 0 24 24"><path d="M21 5c-1.11-.35-2.33-.5-3.5-.5-1.95 0-4.05.4-5.5 1.5-1.45-1.1-3.55-1.5-5.5-1.5S2.45 4.9 1 6v14.65c0 .25.25.5.5.5.1 0 .15-.05.25-.05C3.1 20.45 5.05 20 6.5 20c1.95 0 4.05.4 5.5 1.5 1.35-.85 3.8-1.5 5.5-1.5 1.65 0 3.35.3 4.75 1.05.1.05.15.05.25.05.25 0 .5-.25.5-.5V6c-.6-.45-1.25-.75-2-1zm0 13.5c-1.1-.35-2.3-.5-3.5-.5-1.7 0-4.15.65-5.5 1.5V8c1.35-.85 3.8-1.5 5.5-1.5 1.2 0 2.4.15 3.5.5v11.5z"/></svg>
+      <span class="nav-label">Instructions</span>
+    </a>
+
+    <div class="nav-divider"></div>
+
+    <a class="nav-item" data-panel="activity" onclick="switchPanel('activity')">
+      <svg viewBox="0 0 24 24"><path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+      <span class="nav-label">Activity Log</span>
+    </a>
+    <a class="nav-item" data-panel="settings" onclick="switchPanel('settings')">
+      <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+      <span class="nav-label">Settings</span>
+    </a>
+  </nav>
+
+  <div class="sidebar-footer">
+    <a href="https://t.me/tetris_tkhub_bot" target="_blank">
+      <svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm5.56 8.16l-1.97 9.32c-.15.67-.55.83-1.11.52l-3.07-2.26-1.48 1.43c-.16.16-.3.3-.62.3l.22-3.14 5.7-5.15c.25-.22-.05-.34-.39-.13l-7.04 4.44-3.03-.95c-.66-.2-.67-.66.14-.98l11.84-4.56c.55-.2 1.03.13.85.98z"/></svg>
+      <span>Open Bot</span>
+    </a>
+    <a href="https://github.com/GaneshAdimalupu/AttendBot" target="_blank">
+      <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span>GitHub</span>
+    </a>
+  </div>
+</aside>
+
+<!-- ── Main Content ─────────────────────────────────────────────── -->
+<div class="main-wrap">
+  <div class="topbar">
+    <div style="display:flex;align-items:center;gap:12px">
+      <button class="mobile-toggle" onclick="toggleMobileSidebar()">☰</button>
+      <div class="topbar-title" id="topbarTitle"><span class="icon">📊</span> Overview</div>
+    </div>
+    <div class="topbar-right">
+      <a class="topbar-bot-link" href="https://t.me/tetris_tkhub_bot" target="_blank">
+        <svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm5.56 8.16l-1.97 9.32c-.15.67-.55.83-1.11.52l-3.07-2.26-1.48 1.43c-.16.16-.3.3-.62.3l.22-3.14 5.7-5.15c.25-.22-.05-.34-.39-.13l-7.04 4.44-3.03-.95c-.66-.2-.67-.66.14-.98l11.84-4.56c.55-.2 1.03.13.85.98z"/></svg>
+        <span>Open Bot</span>
+      </a>
+      <span class="month-badge" id="monthBadge"></span>
+      <span class="refresh"><span class="live-dot"></span> Live · <a href="javascript:location.reload()">Refresh</a></span>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- ═══════════════ OVERVIEW PANEL ═══════════════ -->
+    <section class="panel active" id="panel-overview">
+      <div class="kpi-grid fade-in" id="kpis"></div>
+      <div id="todayBanner" class="banner" style="display:none"></div>
+      <div id="todayWrap">
+        <h2 class="section-head fade-in fade-d1">Today's Headcount</h2>
+        <table class="today-table fade-in fade-d2">
+          <thead><tr><th>Employee</th><th>Status</th><th>Marked at</th></tr></thead>
+          <tbody id="todayBody"></tbody>
+        </table>
+      </div>
+      <div style="margin-top:32px">
+        <h2 class="section-head fade-in fade-d2">Monthly Overview</h2>
+        <div class="search-wrap fade-in fade-d3"><input type="text" class="search-input" id="searchInput" placeholder="Search employees..."></div>
+        <div class="team-grid" id="teamGrid"></div>
+      </div>
+    </section>
+
+    <!-- ═══════════════ EMPLOYEES PANEL ══════════════ -->
+    <section class="panel" id="panel-employees">
+      <h2 class="section-head fade-in">Active Employees</h2>
+      <!-- Admin auth banner for employee management -->
+      <div class="emp-auth-banner fade-in" id="empAuthBanner">
+        <div id="empAuthLocked" class="emp-auth-row">
+          <div class="emp-auth-info">
+            <span class="status-dot off"></span>
+            <span>Unlock admin to <b>edit</b> or <b>archive</b> employees</span>
+          </div>
+          <div class="emp-auth-form">
+            <input type="password" id="empAdminPwdInput" placeholder="Admin password" class="form-input" style="width:180px"
+              onkeydown="if(event.key==='Enter')unlockFromEmployees()">
+            <button onclick="unlockFromEmployees()" class="btn btn-accent" style="padding:6px 14px;font-size:.75rem">Unlock</button>
+          </div>
+          <p id="empAuthError" style="color:var(--danger);font-size:.7rem;margin-top:4px;display:none">Incorrect password.</p>
+        </div>
+        <div id="empAuthUnlocked" class="emp-auth-row" style="display:none">
+          <div class="emp-auth-info">
+            <span class="status-dot on"></span>
+            <span>Admin <b>authenticated</b> — you can edit and archive employees</span>
+          </div>
+          <button onclick="lockAdmin()" class="btn btn-ghost" style="padding:5px 12px;font-size:.72rem">🔒 Lock</button>
+        </div>
+      </div>
+      <div class="search-wrap fade-in fade-d1"><input type="text" class="search-input" id="empSearchInput" placeholder="Search by name or username..."></div>
+      <div class="emp-mgmt-wrap fade-in fade-d1">
+        <table class="today-table" id="empTable">
+          <thead><tr><th>Employee</th><th>Telegram ID</th><th>Username</th><th style="text-align:right">Actions</th></tr></thead>
+          <tbody id="empTableBody"></tbody>
+        </table>
+      </div>
+      <div id="archivedSection" style="display:none;margin-top:32px">
+        <h2 class="section-head">Archived Members</h2>
+        <div class="emp-mgmt-wrap">
+          <table class="today-table" id="archivedTable">
+            <thead><tr><th>Employee</th><th>Telegram ID</th><th>Username</th><th style="text-align:right">Actions</th></tr></thead>
+            <tbody id="archivedTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════ HOLIDAYS PANEL ═══════════════ -->
+    <section class="panel" id="panel-holidays">
+      <h2 class="section-head fade-in">Holiday Management</h2>
+      <div class="holiday-grid fade-in fade-d1">
+        <!-- List -->
+        <div class="holiday-card" style="min-height:200px">
+          <h3>Upcoming &amp; Past Holidays</h3>
+          <div id="holidayList" style="display:flex;flex-direction:column;gap:8px;max-height:400px;overflow-y:auto;padding-right:4px"></div>
+        </div>
+        <!-- Admin Form -->
+        <div class="holiday-card">
+          <h3>Manage Holidays</h3>
+          <div id="adminAuthWrap">
+            <p style="font-size:.75rem;color:var(--muted);margin-bottom:12px">Enter Admin Password to manage holidays:</p>
+            <div style="display:flex;gap:8px">
+              <input type="password" id="adminPasswordInput" placeholder="Password" class="form-input" style="flex:1">
+              <button onclick="unlockAdmin()" class="btn btn-accent">Unlock</button>
+            </div>
+            <p id="authError" style="color:var(--danger);font-size:.7rem;margin-top:6px;display:none">Incorrect password.</p>
+          </div>
+          <div id="holidayFormWrap" style="display:none">
+            <div style="margin-bottom:12px;display:flex;gap:12px">
+              <div style="flex:1"><label class="form-label">Start Date</label><input type="date" id="holidayDateInput" class="form-input"></div>
+              <div style="flex:1"><label class="form-label">End Date (Optional)</label><input type="date" id="holidayEndDateInput" class="form-input"></div>
+            </div>
+            <div style="margin-bottom:14px"><label class="form-label">Description</label><input type="text" id="holidayDescInput" placeholder="e.g. Independence Day" class="form-input"></div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <button onclick="addHolidaySubmit()" class="btn btn-purple">Add Holiday</button>
+              <button onclick="lockAdmin()" class="btn btn-ghost">Lock</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════ INSTRUCTIONS PANEL ═══════════ -->
+    <section class="panel" id="panel-instructions">
+      <h2 class="section-head fade-in">How to Use AttendBot</h2>
+      <div class="guide-grid fade-in fade-d1">
+        <div class="guide-card">
+          <h3><span class="gc-icon">🚀</span> Getting Started</h3>
+          <ul class="cmd-list">
+            <li><span class="cmd-name">/start</span><span class="cmd-desc">Open the bot and register with your full name. Sets up your profile and shows the persistent keyboard.</span></li>
+            <li><span class="cmd-name">/help</span><span class="cmd-desc">Display the welcome message with all available commands and the keyboard menu.</span></li>
+          </ul>
+        </div>
+        <div class="guide-card">
+          <h3><span class="gc-icon">📋</span> Daily Attendance</h3>
+          <ul class="cmd-list">
+            <li><span class="cmd-name">✅ Mark Present</span><span class="cmd-desc">Tap the button (or type it) to mark yourself present for today. Works only on weekdays.</span></li>
+            <li><span class="cmd-name">🏖️ Take Leave</span><span class="cmd-desc">Mark a leave day. Deducts from your monthly leave quota (4 per month).</span></li>
+          </ul>
+        </div>
+        <div class="guide-card">
+          <h3><span class="gc-icon">📊</span> Stats &amp; History</h3>
+          <ul class="cmd-list">
+            <li><span class="cmd-name">📊 Check Balance</span><span class="cmd-desc">View your monthly attendance breakdown — present days, leaves taken, remaining leaves, and a visual calendar strip.</span></li>
+            <li><span class="cmd-name">/status</span><span class="cmd-desc">Same as Check Balance — view your personal monthly stats via slash command.</span></li>
+            <li><span class="cmd-name">/rename Name</span><span class="cmd-desc">Change your display name on records. E.g. <code>/rename John Doe</code></span></li>
+          </ul>
+        </div>
+        <div class="guide-card">
+          <h3><span class="gc-icon">🔐</span> Admin Commands</h3>
+          <ul class="cmd-list">
+            <li><span class="cmd-name">📋 Admin Report</span><span class="cmd-desc">Generate a full team attendance summary for any month with per-employee stats.</span></li>
+            <li><span class="cmd-name">📥 Export CSV</span><span class="cmd-desc">Download a CSV spreadsheet of attendance. Supports: <code>/export</code>, <code>/export last</code>, <code>/export May 2025</code></span></li>
+            <li><span class="cmd-name">/whois name</span><span class="cmd-desc">Look up an employee's details by name or username.</span></li>
+            <li><span class="cmd-name">/remove id</span><span class="cmd-desc">Archive an employee. E.g. <code>/remove 123456789</code></span></li>
+            <li><span class="cmd-name">/archived</span><span class="cmd-desc">View list of all archived employees.</span></li>
+            <li><span class="cmd-name">/restore id</span><span class="cmd-desc">Restore an archived employee. E.g. <code>/restore 123456789</code></span></li>
+            <li><span class="cmd-name">/broadcast msg</span><span class="cmd-desc">Send a message to all registered employees at once.</span></li>
+            <li><span class="cmd-name">/admin password</span><span class="cmd-desc">Self-promote to admin access for evaluation. Use the configured admin password.</span></li>
+            <li><span class="cmd-name">/holidays</span><span class="cmd-desc">List all registered public holidays for the current year.</span></li>
+            <li><span class="cmd-name">/addholiday cmd</span><span class="cmd-desc">Add a holiday or range. E.g. <code>/addholiday 2026-06-15 Eid</code></span></li>
+            <li><span class="cmd-name">/removeholiday cmd</span><span class="cmd-desc">Remove a holiday or range. E.g. <code>/removeholiday 2026-06-15</code></span></li>
+          </ul>
+        </div>
+      </div>
+      <div class="guide-footer fade-in fade-d2">
+        <b>Tip:</b> The bot uses a persistent keyboard — just tap the buttons at the bottom of the chat. No need to memorize commands!<br>
+        <b>Note:</b> Attendance can only be marked on <b>weekdays</b> (Mon–Fri). Weekend marking is disabled.
+      </div>
+    </section>
+
+    <!-- ═══════════════ ACTIVITY LOG PANEL ═══════════ -->
+    <section class="panel" id="panel-activity">
+      <h2 class="section-head fade-in">Recent Activity — Last 48 Hours</h2>
+      <div class="activity-list fade-in fade-d1" id="activityList">
+        <div class="activity-empty">Click to load activity...</div>
+      </div>
+    </section>
+
+    <!-- ═══════════════ SETTINGS PANEL ═══════════════ -->
+    <section class="panel" id="panel-settings">
+      <h2 class="section-head fade-in">Dashboard Settings</h2>
+      <div class="settings-grid fade-in fade-d1">
+        <div class="settings-card">
+          <h3><span class="s-icon">🔐</span> Admin Authentication</h3>
+          <div class="info-row">
+            <span class="info-label">Status</span>
+            <span class="info-val" id="authStatusText"><span class="status-dot off"></span> Locked</span>
+          </div>
+          <div style="margin-top:14px">
+            <p style="font-size:.75rem;color:var(--muted);margin-bottom:8px">Authenticate to manage holidays and view admin actions.</p>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button onclick="switchPanel('holidays')" class="btn btn-accent" style="font-size:.75rem">Go to Holidays →</button>
+            </div>
+          </div>
+        </div>
+        <div class="settings-card">
+          <h3><span class="s-icon">📡</span> System Info</h3>
+          <div id="sysInfoRows">
+            <div class="info-row"><span class="info-label">Loading...</span></div>
+          </div>
+        </div>
+        <div class="settings-card">
+          <h3><span class="s-icon">🔗</span> Quick Links</h3>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+            <a href="https://t.me/tetris_tkhub_bot" target="_blank" style="color:var(--accent);font-size:.82rem;text-decoration:none;display:flex;align-items:center;gap:8px">
+              <svg viewBox="0 0 24 24" style="width:16px;height:16px;fill:currentColor"><path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm5.56 8.16l-1.97 9.32c-.15.67-.55.83-1.11.52l-3.07-2.26-1.48 1.43c-.16.16-.3.3-.62.3l.22-3.14 5.7-5.15c.25-.22-.05-.34-.39-.13l-7.04 4.44-3.03-.95c-.66-.2-.67-.66.14-.98l11.84-4.56c.55-.2 1.03.13.85.98z"/></svg>
+              Open Telegram Bot
+            </a>
+            <a href="https://github.com/GaneshAdimalupu/AttendBot" target="_blank" style="color:var(--muted);font-size:.82rem;text-decoration:none;display:flex;align-items:center;gap:8px">
+              <svg viewBox="0 0 16 16" style="width:16px;height:16px;fill:currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+              View on GitHub
+            </a>
+            <a href="/demo/seed" style="color:var(--muted);font-size:.82rem;text-decoration:none;display:flex;align-items:center;gap:8px" onclick="return confirm('Seed demo data? This adds 10 test employees.')">
+              <span style="font-size:1rem">🌱</span> Seed Demo Data
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<script src="/static/dashboard.js"></script>
+</body>
+</html>
