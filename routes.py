@@ -137,8 +137,18 @@ def dashboard():
 @app.route("/api/dashboard")
 def api_dashboard():
     today = today_ist()
-    year, month = today.year, today.month
-    wdays_past = [d for d in working_days_in_month(year, month) if d <= today]
+    month_arg = request.args.get("month")
+    if month_arg:
+        try:
+            year, month = map(int, month_arg.split("-"))
+        except ValueError:
+            year, month = today.year, today.month
+    else:
+        year, month = today.year, today.month
+
+    is_current_month = (year == today.year and month == today.month)
+    wdays_all = working_days_in_month(year, month)
+    wdays_past = [d for d in wdays_all if d <= today] if is_current_month else wdays_all
 
     employees = execute_query("SELECT * FROM employees WHERE is_active = TRUE ORDER BY name", fetch_all=True)
     month_str = f"{year:04d}-{month:02d}"
@@ -267,7 +277,7 @@ def api_rename_employee():
     if not tid or not new_name:
         return jsonify({"error": "Missing telegram_id or name"}), 400
     execute_query(
-        "UPDATE employees SET name=%s WHERE telegram_id=%s",
+        "UPDATE employees SET name=%s, updated_at=NOW() WHERE telegram_id=%s",
         (new_name, tid), commit=True
     )
     return jsonify({"success": True})
@@ -282,7 +292,7 @@ def api_archive_employee():
     if not tid:
         return jsonify({"error": "Missing telegram_id"}), 400
     execute_query(
-        "UPDATE employees SET is_active=FALSE WHERE telegram_id=%s",
+        "UPDATE employees SET is_active=FALSE, archived_at=NOW(), updated_at=NOW() WHERE telegram_id=%s",
         (tid,), commit=True
     )
     return jsonify({"success": True})
@@ -297,7 +307,7 @@ def api_restore_employee():
     if not tid:
         return jsonify({"error": "Missing telegram_id"}), 400
     execute_query(
-        "UPDATE employees SET is_active=TRUE WHERE telegram_id=%s",
+        "UPDATE employees SET is_active=TRUE, archived_at=NULL, updated_at=NOW() WHERE telegram_id=%s",
         (tid,), commit=True
     )
     return jsonify({"success": True})

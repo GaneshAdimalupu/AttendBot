@@ -123,8 +123,8 @@ def mark(telegram_id: int, d: date, status: str):
 
 def register(telegram_id: int, name: str, username: str):
     execute_query(
-        "INSERT INTO employees(telegram_id, name, username, is_active) VALUES (%s,%s,%s, TRUE) "
-        "ON CONFLICT (telegram_id) DO UPDATE SET name=EXCLUDED.name, username=EXCLUDED.username, is_active=TRUE",
+        "INSERT INTO employees(telegram_id, name, username, is_active, updated_at) VALUES (%s,%s,%s, TRUE, NOW()) "
+        "ON CONFLICT (telegram_id) DO UPDATE SET name=EXCLUDED.name, username=EXCLUDED.username, is_active=TRUE, updated_at=NOW()",
         (telegram_id, name, username or ""),
         commit=True
     )
@@ -293,6 +293,6 @@ def sync_username(msg):
     )
     if stored and stored["username"] != current_uname:
         execute_query(
-            "UPDATE employees SET username=%s WHERE telegram_id=%s",
+            "UPDATE employees SET username=%s, updated_at=NOW() WHERE telegram_id=%s",
             (current_uname, uid), commit=True
         )

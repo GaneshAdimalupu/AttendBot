@@ -2,6 +2,7 @@
 const COLORS = ['#64748b','#4ade80','#f59e0b','#a855f7','#3b82f6'];
 let allData = null;
 let isAdminUnlocked = false;
+let currentDashboardMonth = null;
 
 // Fixed: Added XSS Sanitizer function
 function escapeHTML(str) {
@@ -89,24 +90,32 @@ function animateCount(el, target) {
 
 // ── Main Data Load ────────────────────────────────────────────────
 async function load() {
-  const data = await fetch('/api/dashboard').then(r => r.json());
+  const url = currentDashboardMonth ? `/api/dashboard?month=${currentDashboardMonth}` : '/api/dashboard';
+  const data = await fetch(url).then(r => r.json());
   allData = data;
-  const today = new Date().toISOString().slice(0, 10);
-  const [year, month] = today.split('-').map(Number);
+  
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const viewMonthStr = currentDashboardMonth || todayStr.slice(0, 7);
+  const [year, month] = viewMonthStr.split('-').map(Number);
   const daysInMonth = new Date(year, month, 0).getDate();
 
   document.getElementById('monthBadge').textContent =
     new Date(year, month - 1, 1).toLocaleString('default', { month: 'long', year: 'numeric' });
+    
+  const nextBtn = document.getElementById('nextMonthBtn');
+  if (nextBtn) nextBtn.style.display = (viewMonthStr === todayStr.slice(0, 7)) ? 'none' : 'inline-block';
 
-  const t = data.today;
+  const t = data.today || {};
   const total = data.employees.length;
+  const isCurrentMonth = (viewMonthStr === todayStr.slice(0, 7));
+  const shortMonthLabel = new Date(year, month - 1, 1).toLocaleString('default', { month: 'short', year: 'numeric' });
 
   // ── KPIs ──
-  renderKPIs(t, total);
+  renderKPIs(t, total, isCurrentMonth, shortMonthLabel);
   // ── Today Table ──
-  renderTodayTable(data, t);
+  renderTodayTable(data, t, isCurrentMonth);
   // ── Employee Cards ──
-  renderCards(data.employees, year, month, daysInMonth, today);
+  renderCards(data.employees, year, month, daysInMonth, todayStr);
   // ── Employee Management ──
   renderEmployeeTable(data.employees);
   renderArchivedTable(data.archived);
@@ -116,18 +125,28 @@ async function load() {
   renderSettingsInfo(data);
   checkSavedAuth();
 
-  setTimeout(load, 60000);
+  // Clear previous timeout to avoid multiple loops
+  if (window.loadTimeout) clearTimeout(window.loadTimeout);
+  window.loadTimeout = setTimeout(load, 60000);
 }
 
-function renderKPIs(t, total) {
+function renderKPIs(t, total, isCurrentMonth, shortMonthLabel = '') {
   let kpiData;
-  if (t.is_holiday) {
+  if (!isCurrentMonth) {
+    kpiData = [
+      { val: total, label: 'Total Employees', color: '#64748b' },
+      { val: shortMonthLabel, label: 'Viewing Month', color: '#a855f7' },
+      { val: '—', label: 'On Leave Today', color: '#64748b' },
+      { val: '—', label: 'Not Marked Yet', color: '#64748b' },
+      { val: '—', label: 'Daily Rate', color: '#64748b' },
+    ];
+  } else if (t.is_holiday) {
     kpiData = [
       { val: total, label: 'Total Employees', color: '#64748b' },
       { val: 'Holiday', label: "Today's Status", color: '#a855f7' },
       { val: '—', label: 'On Leave Today', color: '#64748b' },
       { val: '—', label: 'Not Marked Yet', color: '#64748b' },
-      { val: '—', label: 'Attendance Rate', color: '#64748b' },
+      { val: '—', label: 'Daily Rate', color: '#64748b' },
     ];
   } else if (t.is_weekend) {
     kpiData = [
@@ -135,7 +154,7 @@ function renderKPIs(t, total) {
       { val: 'Weekend', label: "Today's Status", color: '#64748b' },
       { val: '—', label: 'On Leave Today', color: '#64748b' },
       { val: '—', label: 'Not Marked Yet', color: '#64748b' },
-      { val: '—', label: 'Attendance Rate', color: '#64748b' },
+      { val: '—', label: 'Daily Rate', color: '#64748b' },
     ];
   } else {
     const rate = total > 0 ? Math.round((t.present / total) * 100) : 0;
@@ -144,7 +163,7 @@ function renderKPIs(t, total) {
       { val: t.present, label: 'Present Today', color: '#4ade80' },
       { val: t.on_leave, label: 'On Leave Today', color: '#f59e0b' },
       { val: t.unmarked, label: 'Not Marked Yet', color: '#64748b' },
-      { val: rate, label: 'Attendance Rate', color: '#4ade80', suffix: '%' },
+      { val: rate, label: 'Daily Rate', color: '#4ade80', suffix: '%' },
     ];
   }
   document.getElementById('kpis').innerHTML = kpiData.map((k, i) => `
@@ -162,9 +181,15 @@ function renderKPIs(t, total) {
   });
 }
 
-function renderTodayTable(data, t) {
+function renderTodayTable(data, t, isCurrentMonth) {
   const tableWrap = document.getElementById('todayWrap');
   const banner = document.getElementById('todayBanner');
+
+  if (!isCurrentMonth) {
+    banner.style.display = 'none';
+    tableWrap.style.display = 'none';
+    return;
+  }
 
   if (t.is_holiday) {
     banner.className = 'banner'; banner.style.display = 'block'; banner.style.color = '#a855f7';
@@ -545,6 +570,30 @@ function renderSettingsInfo(data) {
 }
 
 // ── Search ────────────────────────────────────────────────────────
+function prevMonth() {
+  const todayStr = new Date().toISOString().slice(0, 7);
+  let view = currentDashboardMonth || todayStr;
+  let [y, m] = view.split('-').map(Number);
+  m--;
+  if (m < 1) { m = 12; y--; }
+  currentDashboardMonth = `${y}-${String(m).padStart(2, '0')}`;
+  document.getElementById('teamGrid').innerHTML = '<div style="padding:24px;color:var(--muted)">Loading...</div>';
+  load();
+}
+
+function nextMonth() {
+  const todayStr = new Date().toISOString().slice(0, 7);
+  let view = currentDashboardMonth || todayStr;
+  if (view === todayStr) return; 
+  let [y, m] = view.split('-').map(Number);
+  m++;
+  if (m > 12) { m = 1; y++; }
+  currentDashboardMonth = `${y}-${String(m).padStart(2, '0')}`;
+  if (currentDashboardMonth === todayStr) currentDashboardMonth = null;
+  document.getElementById('teamGrid').innerHTML = '<div style="padding:24px;color:var(--muted)">Loading...</div>';
+  load();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   // Overview search (monthly cards)
   document.getElementById('searchInput').addEventListener('input', function () {

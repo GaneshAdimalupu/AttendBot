@@ -231,7 +231,7 @@ def handle_remove(msg):
         return
         
     # Archive them instead of deleting!
-    execute_query("UPDATE employees SET is_active = FALSE WHERE telegram_id=%s", (target_id,), commit=True)
+    execute_query("UPDATE employees SET is_active = FALSE, archived_at = NOW(), updated_at = NOW() WHERE telegram_id=%s", (target_id,), commit=True)
     
     send(uid, f"✅ Employee <b>{emp['name']}</b> has been archived.\n\nThey will no longer appear on the live dashboard or receive reminders, but their past attendance is saved for exports.", reply_markup=persistent_menu(uid))
 
@@ -287,7 +287,7 @@ def handle_restore(msg):
         send(uid, f"ℹ️ Employee <b>{emp['name']}</b> is already active.", reply_markup=persistent_menu(uid))
         return
 
-    execute_query("UPDATE employees SET is_active = TRUE WHERE telegram_id=%s", (target_id,), commit=True)
+    execute_query("UPDATE employees SET is_active = TRUE, archived_at = NULL, updated_at = NOW() WHERE telegram_id=%s", (target_id,), commit=True)
     send(uid, f"✅ Employee <b>{emp['name']}</b> has been restored.\n\nThey will now appear on the active dashboard and receive reminders again.", reply_markup=persistent_menu(uid))
 
 def handle_addholiday(msg):

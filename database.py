@@ -53,9 +53,24 @@ def init_db():
         );
     """, commit=True)
     
-    # Safely add the is_active column for existing databases
+    # Safely upgrade registered_at and add is_active, archived_at, and updated_at columns
+    try:
+        execute_query("ALTER TABLE employees ALTER COLUMN registered_at TYPE TIMESTAMPTZ", commit=True)
+    except Exception:
+        pass
+        
     try:
         execute_query("ALTER TABLE employees ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE", commit=True)
+    except Exception:
+        pass
+
+    try:
+        execute_query("ALTER TABLE employees ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ", commit=True)
+    except Exception:
+        pass
+
+    try:
+        execute_query("ALTER TABLE employees ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()", commit=True)
     except Exception:
         pass
         

@@ -79,7 +79,11 @@
         <svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm5.56 8.16l-1.97 9.32c-.15.67-.55.83-1.11.52l-3.07-2.26-1.48 1.43c-.16.16-.3.3-.62.3l.22-3.14 5.7-5.15c.25-.22-.05-.34-.39-.13l-7.04 4.44-3.03-.95c-.66-.2-.67-.66.14-.98l11.84-4.56c.55-.2 1.03.13.85.98z"/></svg>
         <span>Open Bot</span>
       </a>
-      <span class="month-badge" id="monthBadge"></span>
+      <div style="display:flex;align-items:center;gap:4px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:4px">
+        <button class="btn btn-ghost" onclick="prevMonth()" style="padding:4px 8px;font-size:0.8rem" title="Previous Month">◀</button>
+        <span class="month-badge" id="monthBadge" style="margin:0;padding:0 4px;font-size:0.85rem;min-width:85px;text-align:center"></span>
+        <button class="btn btn-ghost" id="nextMonthBtn" onclick="nextMonth()" style="padding:4px 8px;font-size:0.8rem" title="Next Month">▶</button>
+      </div>
       <span class="refresh"><span class="live-dot"></span> Live · <a href="javascript:location.reload()">Refresh</a></span>
     </div>
   </div>
