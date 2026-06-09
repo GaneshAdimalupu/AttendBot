@@ -1,0 +1,23 @@
+name: Daily Attendance Reminder
+
+on:
+  schedule:
+    # This runs at 04:30 UTC every Monday through Friday.
+    # 04:30 UTC is exactly 10:00 AM IST (Indian Standard Time).
+    - cron: '30 4 * * 1-5'
+  
+  # This allows you to trigger it manually from the GitHub Actions tab for testing
+  workflow_dispatch: 
+
+jobs:
+  ping_reminder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake up Render instance
+        run: curl -s -o /dev/null --max-time 60 https://attendbot-demo.onrender.com/ || true
+
+      - name: Wait for spin-up
+        run: sleep 30
+
+      - name: Ping Cron Endpoint
+        run: curl -f -X GET --max-time 30 https://attendbot-demo.onrender.com/cron/remind
